@@ -19,6 +19,7 @@
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "can.h"
+#include "dma.h"
 #include "usart.h"
 #include "gpio.h"
 
@@ -45,6 +46,7 @@ uint32_t last_print_tick = 0;
 /* Private macro -------------------------------------------------------------*/
 /* USER CODE BEGIN PM */
 
+//电机PID部分
 extern moto_info_t motor_info[MOTOR_MAX_NUM];
 pid_struct_t motor_speed_pid[MOTOR_MAX_NUM];
 pid_struct_t motor_angle_pid[MOTOR_MAX_NUM];
@@ -67,10 +69,14 @@ void SystemClock_Config(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-int __io_putchar(int ch)
-{
-  HAL_UART_Transmit(&huart1, (uint8_t *)&ch, 1, 0xFFFF);
-  return ch;
+//非阻塞式打印部分
+static char printf_buffer[100];//DMA缓冲区
+static volatile uint8_t uart_tx_busy = 0;//串口忙标志
+
+void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart) {
+  if (huart->Instance == USART1) {
+    uart_tx_busy = 0;
+  }
 }
 /* USER CODE END 0 */
 
@@ -103,6 +109,7 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
+  MX_DMA_Init();
   MX_CAN1_Init();
   MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
@@ -157,10 +164,16 @@ int main(void)
     if (now - last_print_tick >= PRINT_INTERVAL_MS)
     {
       last_print_tick = now;
-      printf("target_angle:%.1f actual_angle:%.1f actual_speed:%d\r\n",
-             target_angle,
-             current_angle,
-             (int)motor_info[0].rotor_speed);
+
+      if(!uart_tx_busy) {
+        uart_tx_busy = 1;
+        int len = snprintf(printf_buffer, sizeof(printf_buffer),
+                                   "target_angle:%.1f actual_angle:%.1f actual_speed:%d\r\n",
+                                   target_angle,
+                                   current_angle,
+                                   (int)motor_info[0].rotor_speed);
+        HAL_UART_Transmit_DMA(&huart1, (uint8_t*)printf_buffer, len);
+      }
     }
 
   }
