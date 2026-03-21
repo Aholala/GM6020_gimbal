@@ -44,9 +44,13 @@ uint32_t last_print_tick = 0;
 
 /* Private macro -------------------------------------------------------------*/
 /* USER CODE BEGIN PM */
+
 extern moto_info_t motor_info[MOTOR_MAX_NUM];
-pid_struct_t motor_pid[MOTOR_MAX_NUM];
-float target_speed = 200.0f;
+pid_struct_t motor_speed_pid[MOTOR_MAX_NUM];
+pid_struct_t motor_angle_pid[MOTOR_MAX_NUM];
+//float target_speed = 200.0f;//目标速度 串级速度不是恒定的
+float target_angle = 0.0f;//目标角度
+
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
@@ -104,8 +108,10 @@ int main(void)
   /* USER CODE BEGIN 2 */
 
   can_user_init(&hcan1);                   // config can filter, start can
-  pid_init(&motor_pid[0], 40, 3, 0, 10000, 30000);
-
+  //速度环  输出电压 限幅30000
+  pid_init(&motor_speed_pid[0], 0, 0, 0, 10000, 30000);
+  //位置环 输出目标转速 限幅为200rpm
+  pid_init(&motor_angle_pid[0], 0, 0, 0, 0, 200);
   /*源代码给7个电机初始化
    for (uint8_t i = 0; i < 7; i++)
   {
@@ -121,7 +127,12 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-    motor_info[0].set_voltage = (int16_t)pid_calc(&motor_pid[0], target_speed, motor_info[0].rotor_speed);
+    //当前角度0-8191转换到0-360
+    float current_angle = (float)motor_info[0].rotor_angle * 360.0f /8192.0f;
+    //外环位置环 输出目标转速
+    float target_speed = pid_calc(&motor_angle_pid[0], target_angle, current_angle);
+    //内环速度环 输出电压
+    motor_info[0].set_voltage = (int16_t)pid_calc(&motor_speed_pid[0], target_speed, (float)motor_info[0].rotor_speed);
     set_motor_voltage(0,motor_info[0].set_voltage,0,0,0);
 
     /*原demo控制7电机
@@ -146,8 +157,9 @@ int main(void)
     if (now - last_print_tick >= PRINT_INTERVAL_MS)
     {
       last_print_tick = now;
-      printf("target:%.1f actual:%d\r\n",
-             target_speed,
+      printf("target_angle:%.1f actual_angle:%.1f actual_speed:%d\r\n",
+             target_angle,
+             current_angle,
              (int)motor_info[0].rotor_speed);
     }
 
@@ -172,12 +184,11 @@ void SystemClock_Config(void)
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.
   */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
-  RCC_OscInitStruct.HSIState = RCC_HSI_ON;
-  RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
+  RCC_OscInitStruct.HSEState = RCC_HSE_ON;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
-  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSI;
-  RCC_OscInitStruct.PLL.PLLM = 8;
+  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
+  RCC_OscInitStruct.PLL.PLLM = 4;
   RCC_OscInitStruct.PLL.PLLN = 168;
   RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
   RCC_OscInitStruct.PLL.PLLQ = 4;
