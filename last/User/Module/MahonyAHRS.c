@@ -8,15 +8,15 @@
 
 // Header files
 
-#include "lib_MahonyAHRS.h"
+#include "MahonyAHRS.h"
 #include <math.h>
 
 //---------------------------------------------------------------------------------------------------
 // Definitions
 
-#define sampleFreq	100.0f			// sample frequency in Hz（与主循环 10ms/次 对齐）
+#define sampleFreq	1000.0f			// sample frequency in Hz（与主循环 10ms/次 对齐）
 #define twoKpDef	(2.0f * 20.0f)	// 2 * proportional gain     //比例增益(纠正力度)
-#define twoKiDef	(2.0f * 0.5f)	// 2 * integral gain	     //积分增益（用于消除长期偏置）积分增益（用于消除长期偏置）
+#define twoKiDef	(2.0f * 0.1f)	// 2 * integral gain	     //积分增益（用于消除长期偏置）积分增益（用于消除长期偏置）
 
 //---------------------------------------------------------------------------------------------------
 // Variable definitions

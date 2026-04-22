@@ -2,7 +2,7 @@
 #define __APP_H
 
 #include <stdint.h>
-#include "lib_akf.h"
+#include "AKF.h"   /* Gyro_AKF_HandleTypeDef */
 
 /* ===== 粒子滤波配置 ================================================== */
 #define PF_PARTICLE_NUM  25    /* 粒子总数 */

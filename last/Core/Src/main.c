@@ -32,11 +32,11 @@
 #include "math.h"
 #include "bsp_can.h"
 #include "bsp_usb.h"
-#include "bsp_bmi088driver.h"
+#include "bmi088driver.h"
 #include "module_pid.h"
-#include "lib_MahonyAHRS.h"
-#include "lib_akf.h"
-#include "lib_ahrsfusion.h"
+#include "MahonyAHRS.h"
+#include "AKF.h"
+#include "Config.h"
 
 
 
@@ -94,9 +94,11 @@ extern moto_info_t motor_info[MOTOR_MAX_NUM];
 
 /* ===== 正弦扫描参数 ================================================= */
 #define SCAN_AMP       40.0f
-#define SCAN_FREQ       0.1f
+#define SCAN_FREQ       0.5f
 #define SPEED_FF_GAIN   0.0f
-#define HOMING_SPEED   20.0f
+#define HOMING_SPEED   10.0f   /* 上电归零速度（°/s）*/
+#define RETURN_SPEED   60.0f   /* 丢目标回零虚拟目标步进速度（°/s），需 ≥ 电机最大跟踪速度 */
+#define RETURN_ANGLE_OUT_MAX  80.0f  /* 回零时位置环输出限幅（°/s），防止全速冲向零点甩过 */
 #define HOMING_THRESH   3.0f
 
 /* ===== PID 参数 ===================================================== */
@@ -110,7 +112,7 @@ extern moto_info_t motor_info[MOTOR_MAX_NUM];
 #define SPEED_KI        0.05f
 #define SPEED_KD        0.0f
 #define SPEED_I_MAX  4000.0f
-#define SPEED_OUT_MAX 10000.0f//25000
+#define SPEED_OUT_MAX 15000.0f//25000
 
 #define LPF_ALPHA  0.5f
 
@@ -120,11 +122,28 @@ extern moto_info_t motor_info[MOTOR_MAX_NUM];
  *  TRACK_LIMIT_PITCH  ID4（pitch 轴）自瞄限位（°）
  *  LOST_TIMEOUT_MS    丢目标超时时间（ms），超过后从自瞄切回归零
  *  RETURN_THRESH      回零判定阈值（°），两轴均满足才切扫描
+ *  TRACK_CONFIRM_FRAMES  连续检测到目标的帧数门限，达到后才切入自瞄
+ *                        防止 detected 单帧抖动误触发状态切换
  */
 #define TRACK_LIMIT_YAW    60.0f
 #define TRACK_LIMIT_PITCH  40.0f
 #define LOST_TIMEOUT_MS    500
 #define RETURN_THRESH       3.0f
+#define TRACK_CONFIRM_FRAMES  1   /* 连续 5 帧（50ms）确认后才切入自瞄 */
+
+/* ===== 视觉目标角度低通滤波参数 =====================================
+ *  VIS_LPF_ALPHA  一阶低通系数（0~1），越小越平滑响应越慢
+ *                 用于抑制电机抖动引起的视觉反馈振荡
+ *                 推荐从 0.3 开始调，振荡消了再慢慢调大
+ * =================================================================== */
+#define VIS_LPF_ALPHA  0.1f
+
+/* ===== 视觉跳变帧保护 ===============================================
+ *  VIS_JUMP_THRESH  单帧视觉角度变化阈值（°）
+ *                   超过此值认为是跳变帧，直接丢弃不更新目标
+ *                   根据目标最大运动速度调整，推荐从 10° 开始
+ * =================================================================== */
+#define VIS_JUMP_THRESH  10.0f
 
 /* 每个电机独立的 PID */
 pid_struct_t angle_pid2, angle_pid4;
@@ -164,9 +183,25 @@ float filtered_spd4 = 0.0f;
 uint16_t zero_enc2 = 0;
 uint16_t zero_enc4 = 0;
 
-/* 自瞄目标角度（°），由视觉弧度转换而来，经限位 clamp 后使用 */
+/* 自瞄目标角度（°），视觉下发绝对角度，直接赋值使用，带限位 clamp */
 float track_target_yaw   = 0.0f;  /* ID2 yaw 目标 */
 float track_target_pitch = 0.0f;  /* ID4 pitch 目标 */
+
+/* 视觉零点与编码器零点的偏移（°）
+ * 标定方法：让云台静止在编码器零点（dbg_angle2=0），
+ * 视觉对准正前方装甲板，读取此时 dbg_vis_yaw 的值填入下方，
+ * 或直接在 Ozone 里实时修改 vis_yaw_offset / vis_pitch_offset */
+float vis_yaw_offset   = 0.0f;   /* 上电后在 Ozone 里标定 */
+float vis_pitch_offset = 0.0f;   /* 上电后在 Ozone 里标定 */
+
+/* 视觉目标角度低通滤波器状态（全局，供 Ozone 观测）
+ * 切入 STATE_TRACK 时用编码器位置初始化，平滑收敛到视觉角度 */
+volatile float vis_yaw_filtered   = 0.0f;
+volatile float vis_pitch_filtered = 0.0f;
+
+/* 回零保护锁：STATE_RETURNING 期间置 1，屏蔽视觉切入逻辑
+ * 防止回零途中装甲板仍在视野内导致反复切换 STATE_TRACK / STATE_RETURNING */
+uint8_t returning_lock = 0;
 
 /* 丢目标计时器（ms） */
 uint32_t lost_timer_ms = 0;
@@ -267,6 +302,11 @@ extern volatile uint32_t vis_rx_raw_len;
 float gyro_bias[3]    = {0.0f, 0.0f, 0.0f};
 /* 安装偏移（校准收敛后记录，之后欧拉角减掉此值） */
 float euler_offset[3] = {0.0f, 0.0f, 0.0f};  /* [roll, pitch, yaw] */
+
+/* TOP_IMU_ALIGN 完成时记录的 IMU 零点偏置
+ * dbg_pitch / dbg_yaw 在此之后减掉这个值，使水平位置输出为 0° */
+float imu_zero_pitch = 0.0f;
+float imu_zero_yaw   = 0.0f;
 
 volatile int imu_calib_done = 0;
 
@@ -503,19 +543,22 @@ int main(void)
           float az0 = az_mean;
 
           /* 直接由重力方向计算 roll/pitch 安装偏移
-           * 注意：运行段 pitch/roll 已对调，此处索引也对调，保持一致 */
-          euler_offset[1] = atan2f(ay0, az0) * rad_to_angle;   /* 对调：→ pitch偏移 */
-          float sin_p0 = -ax0;
-          if      (sin_p0 >  1.0f) sin_p0 =  1.0f;
-          else if (sin_p0 < -1.0f) sin_p0 = -1.0f;
-          euler_offset[0] = -asinf(sin_p0) * rad_to_angle;       /* 对调：→ roll偏移 */
-          euler_offset[2] = 0.0f;                                /* yaw 无绝对参考，归零 */
+           * 先算 Mahony 原始坐标系下的值，再按运行段互换规则转换后存储，
+           * 使 euler_offset 与运行段减法所处坐标系一致 */
+          float pitch_offset_raw = -asinf(-ax0) * rad_to_angle;   /* Mahony 原始 pitch */
+          float roll_offset_raw  =  atan2f(ay0, az0) * rad_to_angle; /* Mahony 原始 roll  */
+          /* 运行段互换：roll_m = pitch_m, pitch_m = -roll_m
+           * 故互换后 roll 偏移 = 原始 pitch 偏移，pitch 偏移 = -原始 roll 偏移 */
+          euler_offset[0] =  pitch_offset_raw;   /* 互换后 roll  偏移 */
+          euler_offset[1] = -roll_offset_raw;    /* 互换后 pitch 偏移 */
+          euler_offset[2] = 0.0f;                /* yaw 无绝对参考，归零 */
 
           /* 用安装偏移初始化 Mahony 四元数，保证后续积分起点正确
-           * euler_offset 索引已对调，此处 roll←[1]，pitch←[0] */
+           * euler_offset[0] = 互换后 roll 偏移，euler_offset[1] = 互换后 pitch 偏移
+           * 反算回 Mahony 原始坐标系：roll_r = euler_offset[0]，pitch_r = -euler_offset[1] */
           {
-            float roll_r  = euler_offset[1] / rad_to_angle;
-            float pitch_r = euler_offset[0] / rad_to_angle;
+            float roll_r  =  euler_offset[0] / rad_to_angle;   /* 互换后 roll  → Mahony roll  */
+            float pitch_r = -euler_offset[1] / rad_to_angle;   /* 互换后 pitch → Mahony pitch（反号）*/
             float cr = cosf(roll_r  * 0.5f);
             float sr = sinf(roll_r  * 0.5f);
             float cp = cosf(pitch_r * 0.5f);
@@ -599,12 +642,12 @@ int main(void)
 
         if (yaw_static)
         {
-          /* 静止时 gz 残差即为零偏估计误差 */
-          float gz_err       = gz - yaw_drift_bias;
+          /* 静止时 gz 理论为 0，当前值即残余零偏；PI 估计器逐步收敛到真实偏置 */
+          float gz_err       = gz;                               /* 误差 = gz - 0 */
           yaw_drift_intg    += YAW_ZUPT_KI * gz_err * dt;
           if      (yaw_drift_intg >  YAW_BIAS_MAX) yaw_drift_intg =  YAW_BIAS_MAX;
           else if (yaw_drift_intg < -YAW_BIAS_MAX) yaw_drift_intg = -YAW_BIAS_MAX;
-          yaw_drift_bias     = YAW_ZUPT_KP * gz + yaw_drift_intg;
+          yaw_drift_bias     = YAW_ZUPT_KP * gz_err + yaw_drift_intg;  /* PI 输出即零偏估计 */
           if      (yaw_drift_bias >  YAW_BIAS_MAX) yaw_drift_bias =  YAW_BIAS_MAX;
           else if (yaw_drift_bias < -YAW_BIAS_MAX) yaw_drift_bias = -YAW_BIAS_MAX;
         }
@@ -629,15 +672,15 @@ int main(void)
         yaw_m   = atan2f(2.0f*(q[0]*q[3]+q[1]*q[2]),
                          1.0f-2.0f*(q[2]*q[2]+q[3]*q[3])) * rad_to_angle;
 
-        /* 减安装偏移 */
-        roll_m  -= euler_offset[0];
-        pitch_m -= euler_offset[1];
-        yaw_m   -= euler_offset[2];
-
-        /* pitch/roll 物理轴互换（安装方向决定）*/
+        /* 减安装偏移之前先做 pitch/roll 物理轴互换（安装方向决定）*/
         float tmp = roll_m;
         roll_m  = pitch_m;
         pitch_m = -tmp;
+
+        /* 减安装偏移（euler_offset 存的是互换后坐标系下的值，顺序与此一致）*/
+        roll_m  -= euler_offset[0];
+        pitch_m -= euler_offset[1];
+        yaw_m   -= euler_offset[2];
 
         /* 归一化到 [-180, +180) */
         if      (roll_m  >  180.0f) roll_m  -= 360.0f;
@@ -651,7 +694,6 @@ int main(void)
       /* Mahony 直接输出挂 Ozone（PF 之前，用于对比）*/
       dbg_roll_mahony  = roll_m;
       dbg_pitch_mahony = pitch_m;
-      dbg_yaw          = yaw_m;   /* IMU Mahony 解算 yaw（°） */
 
       /* ---- 3f. 粒子滤波（Pitch / Roll）---- */
       if (!pf_initialized)
@@ -679,9 +721,12 @@ int main(void)
         pf_estimate(&pf);
       }
 
-      /* PF 最终输出挂 Ozone（暂时旁路 PF，直接用 Mahony 输出）*/
-      dbg_pitch = pitch_m;
+      /* PF 最终输出挂 Ozone
+       * TOP_IMU_ALIGN 完成后减去零点偏置，使水平位置输出为 0°
+       * 对齐完成前 imu_zero_pitch/yaw=0，输出原始绝对角度              */
+      dbg_pitch = pitch_m - imu_zero_pitch;
       dbg_roll  = roll_m;
+      dbg_yaw   = yaw_m  - imu_zero_yaw;
 
       /* ---------------------------------------------------------------- */
       /* 4. 电机控制                                                       */
@@ -711,7 +756,7 @@ int main(void)
        *   STATE_TRACK     → 自瞄跟随（视觉绝对角度 + 限位保护）
        *
        *   切换规则（优先级从高到低）：
-       *     1. 任意状态：detected=1 且两轴都已完成归位 → STATE_TRACK
+       *     1. 任意状态：detected 连续 TRACK_CONFIRM_FRAMES 帧且两轴已归位 → STATE_TRACK
        *     2. STATE_TRACK：detected=0 超过 LOST_TIMEOUT_MS → STATE_RETURNING
        *     3. STATE_RETURNING：两轴均到零点（< RETURN_THRESH）→ STATE_SCAN
        *     4. STATE_HOMING：两轴均到零点 → STATE_SCAN（原有逻辑保留）
@@ -766,20 +811,33 @@ int main(void)
 
       /* ---- 4a-3. 收到视觉数据 → 更新目标角度并切/保持自瞄 ----
        *
-       *  vision_active=1 时更新目标，进入 STATE_TRACK。
-       *  vision_active=0（无新帧或 detected=0）时开始丢目标计时，
-       *  超过 LOST_TIMEOUT_MS 后切 STATE_RETURNING，平滑回零后恢复哨兵扫描。
+       *  切入逻辑：vision_active=1（本周期有新帧且detected=1）连续
+       *            TRACK_CONFIRM_FRAMES 帧后切入 STATE_TRACK，
+       *            防止 detected 单帧抖动误触发。
+       *
+       *  STATE_TRACK 内部目标更新与 vision_active 解耦：
+       *    - 只要 g_vision_rx.detected=1 就持续赋值（绝对角度直接覆盖）
+       *    - detected=0 时目标保持上一帧位置不动，同时开始丢目标计时
+       *    - 超过 LOST_TIMEOUT_MS 后切 STATE_RETURNING，平滑回零后恢复扫描
        * --------------------------------------------------------- */
-      if (homing_done && vision_active)
-      {
-        /* 识别到目标：重置丢目标计时器 */
-        lost_timer_ms = 0;
+      static int track_confirm_cnt = 0;  /* 连续检测到目标的帧数 */
 
-        if (state2 != STATE_TRACK)
+      /* 低通滤波器状态已提升为全局变量（vis_yaw_filtered / vis_pitch_filtered），
+       * 切入 STATE_TRACK 时可直接初始化，供 Ozone 实时观测 */
+
+      /* ---- 切入逻辑：vision_active 确认帧计数 ---- */
+      if (homing_done && vision_active && !returning_lock)
+      {
+        track_confirm_cnt++;
+        if (state2 != STATE_TRACK && track_confirm_cnt >= TRACK_CONFIRM_FRAMES)
         {
-          /* 首次进入自瞄：以当前编码器位置为目标起点，清前馈和 PID 积分 */
-          track_target_yaw   = dbg_angle2;
-          track_target_pitch = dbg_angle4;
+          /* 连续 TRACK_CONFIRM_FRAMES 帧确认，切入自瞄
+           * 用当前编码器位置初始化低通滤波器，切入瞬间目标=当前位置，
+           * 低通以 VIS_LPF_ALPHA 速率平滑收敛到视觉角度，
+           * 避免目标跳变导致电机猛冲把装甲板甩出视野
+           * 同时清前馈和 PID 积分 */
+          vis_yaw_filtered   = dbg_angle2;
+          vis_pitch_filtered = dbg_angle4;
           dbg_spd_ff = 0.0f;
           angle_pid2.i_out = 0.0f;
           angle_pid4.i_out = 0.0f;
@@ -788,30 +846,76 @@ int main(void)
           state2 = STATE_TRACK;
           state4 = STATE_TRACK;
         }
+      }
+      else if (state2 != STATE_TRACK)
+      {
+        /* 非自瞄状态且无有效视觉帧：重置确认计数 */
+        track_confirm_cnt = 0;
+      }
+
+      /* ---- STATE_TRACK 内部：目标更新与丢目标计时 ----
+       *
+       *  视觉协议：识别到才发帧，因此"本周期有没有收到新帧"即等价于"是否检测到目标"。
+       *  用 vision_active（本周期 vis_rx_ok 是否递增）而非 g_vision_rx.detected 判断：
+       *    - vision_active=1：本周期收到新帧 → 更新目标，重置丢目标计时
+       *    - vision_active=0：本周期无新帧    → 目标保持不动，累加丢目标时间
+       *  这样帧率低（如 30Hz）时，未收到帧的控制周期不会被误判为"丢失"。
+       * ----------------------------------------------------------------- */
+      if (state2 == STATE_TRACK)
+      {
+        if (vision_active)
+        {
+          /* 本周期收到新帧：先做单帧跳变检测，超过 VIS_JUMP_THRESH 认为是异常帧直接丢弃
+           * 视觉时间戳同步误差可能导致云台运动时坐标转换跳变，在STM32侧兜底过滤 */
+          float vis_yaw_delta   = g_vision_rx.yaw_rad   - vis_yaw_filtered;
+          float vis_pitch_delta = g_vision_rx.pitch_rad - vis_pitch_filtered;
+
+          if (fabsf(vis_yaw_delta) > VIS_JUMP_THRESH || fabsf(vis_pitch_delta) > VIS_JUMP_THRESH)
+          {
+            /* 跳变帧：目标保持不动，只重置丢目标计时，不更新滤波器 */
+            lost_timer_ms     = 0;
+            track_confirm_cnt = 0;
+          }
+          else
+          {
+            /* 正常帧：经低通滤波后覆盖目标，重置丢目标计时和确认计数 */
+            lost_timer_ms     = 0;
+            track_confirm_cnt = 0;
+
+            vis_yaw_filtered   = VIS_LPF_ALPHA * g_vision_rx.yaw_rad
+                               + (1.0f - VIS_LPF_ALPHA) * vis_yaw_filtered;
+            vis_pitch_filtered = VIS_LPF_ALPHA * g_vision_rx.pitch_rad
+                               + (1.0f - VIS_LPF_ALPHA) * vis_pitch_filtered;
+
+            /* 减去视觉零点与编码器零点的偏移，对齐坐标系 */
+            track_target_yaw   = vis_yaw_filtered   - vis_yaw_offset;
+            track_target_pitch = vis_pitch_filtered - vis_pitch_offset;
+
+            if      (track_target_yaw   >  TRACK_LIMIT_YAW)   track_target_yaw   =  TRACK_LIMIT_YAW;
+            else if (track_target_yaw   < -TRACK_LIMIT_YAW)   track_target_yaw   = -TRACK_LIMIT_YAW;
+            if      (track_target_pitch >  TRACK_LIMIT_PITCH)  track_target_pitch =  TRACK_LIMIT_PITCH;
+            else if (track_target_pitch < -TRACK_LIMIT_PITCH)  track_target_pitch = -TRACK_LIMIT_PITCH;
+          }
+        }
         else
         {
-          /* 视觉下发增量（度），叠加到当前目标位置，施加限位 clamp */
-          track_target_yaw   += g_vision_rx.yaw_rad;
-          track_target_pitch += g_vision_rx.pitch_rad;
-
-          if      (track_target_yaw   >  TRACK_LIMIT_YAW)   track_target_yaw   =  TRACK_LIMIT_YAW;
-          else if (track_target_yaw   < -TRACK_LIMIT_YAW)   track_target_yaw   = -TRACK_LIMIT_YAW;
-          if      (track_target_pitch >  TRACK_LIMIT_PITCH)  track_target_pitch =  TRACK_LIMIT_PITCH;
-          else if (track_target_pitch < -TRACK_LIMIT_PITCH)  track_target_pitch = -TRACK_LIMIT_PITCH;
-        }
-      }
-      else if (state2 == STATE_TRACK)
-      {
-        /* 自瞄中丢目标（无新帧或 detected=0）：计时，超过 LOST_TIMEOUT_MS 后切回零 */
-        lost_timer_ms += 10;  /* 10ms 控制周期 */
-        if (lost_timer_ms >= LOST_TIMEOUT_MS)
-        {
-          /* 从当前编码器位置出发，平滑步进回零 */
-          homing_target2 = dbg_angle2;
-          homing_target4 = dbg_angle4;
-          state2 = STATE_RETURNING;
-          state4 = STATE_RETURNING;
-          lost_timer_ms = 0;
+          /* 本周期无新帧：目标保持不动，累加丢目标时间 */
+          lost_timer_ms += 10;  /* 10ms 控制周期 */
+          if (lost_timer_ms >= LOST_TIMEOUT_MS)
+          {
+            /* 超时：从当前编码器位置出发平滑步进回零，清 PID 积分
+             * 置回零保护锁，防止回零途中视觉再次触发 STATE_TRACK */
+            returning_lock = 1;
+            homing_target2 = dbg_angle2;
+            homing_target4 = dbg_angle4;
+            angle_pid2.i_out = 0.0f;
+            angle_pid4.i_out = 0.0f;
+            speed_pid2.i_out = 0.0f;
+            speed_pid4.i_out = 0.0f;
+            state2 = STATE_RETURNING;
+            state4 = STATE_RETURNING;
+            lost_timer_ms = 0;
+          }
         }
       }
 
@@ -824,7 +928,7 @@ int main(void)
        * --------------------------------------------------------------------- */
       if (state2 == STATE_RETURNING)
       {
-        float step2 = HOMING_SPEED * dt;
+        float step2 = RETURN_SPEED * dt;
         if      (homing_target2 >  step2) homing_target2 -= step2;
         else if (homing_target2 < -step2) homing_target2 += step2;
         else                              homing_target2  = 0.0f;
@@ -832,7 +936,7 @@ int main(void)
 
       if (state4 == STATE_RETURNING)
       {
-        float step4 = HOMING_SPEED * dt;
+        float step4 = RETURN_SPEED * dt;
         if      (homing_target4 >  step4) homing_target4 -= step4;
         else if (homing_target4 < -step4) homing_target4 += step4;
         else                              homing_target4  = 0.0f;
@@ -850,6 +954,7 @@ int main(void)
 
         if (ret2_done && ret4_done)
         {
+          returning_lock = 0;   /* 解锁，允许视觉重新切入自瞄 */
           state2     = STATE_SCAN;
           state4     = STATE_SCAN;
           scan_phase = 0.0f;   /* 相位归零，从 sin(0)=0 重新开始，无位置跳变 */
@@ -893,7 +998,7 @@ int main(void)
       /* ---- ID2 PID（yaw 轴）---- */
       {
         float tgt2;
-        if      (state2 == STATE_TRACK)     tgt2 = -track_target_yaw;
+        if      (state2 == STATE_TRACK)     tgt2 = track_target_yaw;
         else if (state2 == STATE_SCAN)      tgt2 = -prof_pos;
         else /* HOMING / RETURNING */       tgt2 = -homing_target2;
 
@@ -906,10 +1011,11 @@ int main(void)
         angle_pid2.d_out  = angle_pid2.kd * (angle_pid2.err[0] - angle_pid2.err[1]);
         float pid_spd2    = angle_pid2.p_out + angle_pid2.i_out + angle_pid2.d_out;
 
-        /* 自瞄时不叠加扫描前馈 */
+        /* 自瞄时不叠加扫描前馈；回零时单独限幅，防止全速冲向零点甩过 */
         float ff2         = (state2 == STATE_TRACK) ? 0.0f : dbg_spd_ff;
+        float out_max2    = (state2 == STATE_RETURNING) ? RETURN_ANGLE_OUT_MAX : angle_pid2.out_max;
         float spd_target2 = pid_spd2 + ff2;
-        LIMIT_MIN_MAX(spd_target2, -angle_pid2.out_max, angle_pid2.out_max);
+        LIMIT_MIN_MAX(spd_target2, -out_max2, out_max2);
 
         float spd_err2    = spd_target2 - filtered_spd2;
         speed_pid2.err[1] = speed_pid2.err[0];
@@ -925,7 +1031,7 @@ int main(void)
       /* ---- ID4 PID（pitch 轴）---- */
       {
         float tgt4;
-        if      (state4 == STATE_TRACK)     tgt4 = -track_target_pitch;
+        if      (state4 == STATE_TRACK)     tgt4 = track_target_pitch;
         else if (state4 == STATE_SCAN)      tgt4 = -prof_pos;
         else /* HOMING / RETURNING */       tgt4 = -homing_target4;
 
@@ -938,10 +1044,11 @@ int main(void)
         angle_pid4.d_out  = angle_pid4.kd * (angle_pid4.err[0] - angle_pid4.err[1]);
         float pid_spd4    = angle_pid4.p_out + angle_pid4.i_out + angle_pid4.d_out;
 
-        /* 自瞄时不叠加扫描前馈 */
+        /* 自瞄时不叠加扫描前馈；回零时单独限幅，防止全速冲向零点甩过 */
         float ff4         = (state4 == STATE_TRACK) ? 0.0f : dbg_spd_ff;
+        float out_max4    = (state4 == STATE_RETURNING) ? RETURN_ANGLE_OUT_MAX : angle_pid4.out_max;
         float spd_target4 = pid_spd4 + ff4;
-        LIMIT_MIN_MAX(spd_target4, -angle_pid4.out_max, angle_pid4.out_max);
+        LIMIT_MIN_MAX(spd_target4, -out_max4, out_max4);
 
         float spd_err4    = spd_target4 - filtered_spd4;
         speed_pid4.err[1] = speed_pid4.err[0];

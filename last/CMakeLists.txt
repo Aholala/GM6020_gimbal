@@ -33,25 +33,23 @@ enable_language(C ASM)
 
 # Create an executable object type
 add_executable(${CMAKE_PROJECT_NAME}
+        User/Module/module_pid.c
+        User/Module/module_pid.h
         User/Bsp/bsp_can.c
         User/Bsp/bsp_can.h
+        User/Bsp/struct_typedef.h
+        User/Module/BMI088driver.c
+        User/Module/BMI088driver.h
+        User/Module/BMI088reg.h
+        User/Module/BMI088Middleware.c
+        User/Module/BMI088Middleware.h
+        User/Module/MahonyAHRS.h
+        User/Module/MahonyAHRS.c
+        User/Module/Config.c
+        User/Module/AKF.c
         User/Bsp/bsp_usb.c
         User/Bsp/bsp_usb.h
 
-        User/Module/module_pid.c
-        User/Module/module_pid.h
-        User/Bsp/bsp_bmi088driver.c
-        User/Bsp/bsp_bmi088driver.h
-        User/Module/module_bmi088reg.h
-        User/Module/module_bmi088Middleware.c
-        User/Module/module_bmi088Middleware.h
-
-        User/Lib/lib_MahonyAHRS.h
-        User/Lib/lib_MahonyAHRS.c
-        User/Lib/lib_ahrsfusion.c
-        User/Lib/lib_ahrsfusion.h
-        User/Lib/lib_akf.c
-        User/Lib/lib_akf.h
 
 )
 
@@ -72,8 +70,6 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
         User/Bsp
         User/Module
-        User/Lib
-        User/App
 
     # Add user defined include paths
 )
@@ -92,5 +88,3 @@ target_link_libraries(${CMAKE_PROJECT_NAME}
 
     # Add user defined libraries
 )
-target_link_options(${CMAKE_PROJECT_NAME} PRIVATE -u _printf_float)
-#approve float

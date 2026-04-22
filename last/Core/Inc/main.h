@@ -66,11 +66,6 @@ void Error_Handler(void);
 #define CS2_Pin GPIO_PIN_1
 #define CS2_GPIO_Port GPIOB
 
-  typedef unsigned char bool_t;
-  typedef float         fp32;
-  typedef double        fp64;
-
-
 /* USER CODE BEGIN Private defines */
 
 /* USER CODE END Private defines */

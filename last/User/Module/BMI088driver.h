@@ -1,6 +1,7 @@
 #ifndef BMI088DRIVER_H
 #define BMI088DRIVER_H
 
+#include "struct_typedef.h"
 #include "main.h"
 
 #define BMI088_TEMP_FACTOR 0.125f

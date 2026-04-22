@@ -1,6 +1,6 @@
-#include "bsp_bmi088driver.h"
-#include "module_bmi088reg.h"
-#include "module_bmi088Middleware.h"
+#include "BMI088driver.h"
+#include "BMI088reg.h"
+#include "BMI088Middleware.h"
 
 
 fp32 BMI088_ACCEL_SEN = BMI088_ACCEL_3G_SEN;
@@ -82,6 +82,7 @@ static uint8_t write_BMI088_gyro_reg_data_error[BMI088_WRITE_GYRO_REG_NUM][3] =
         {BMI088_GYRO_CTRL, BMI088_DRDY_ON, BMI088_GYRO_CTRL_ERROR},
         {BMI088_GYRO_INT3_INT4_IO_CONF, BMI088_GYRO_INT3_GPIO_PP | BMI088_GYRO_INT3_GPIO_LOW, BMI088_GYRO_INT3_INT4_IO_CONF_ERROR},
         {BMI088_GYRO_INT3_INT4_IO_MAP, BMI088_GYRO_DRDY_IO_INT3, BMI088_GYRO_INT3_INT4_IO_MAP_ERROR}
+
 };
 
 uint8_t BMI088_init(void)
