@@ -1,0 +1,126 @@
+#include "BMI088Middleware.h"
+#include "main.h"
+
+extern SPI_HandleTypeDef hspi1;
+
+void BMI088_GPIO_init(void)
+{
+    /* GPIO 已由 MX_GPIO_Init() 完成初始化，此处留空 */
+}
+
+void BMI088_com_init(void)
+{
+    /* SPI1 已由 MX_SPI1_Init() 完成初始化，此处留空 */
+}
+
+void BMI088_delay_ms(uint16_t ms)
+{
+    while (ms--)
+    {
+        BMI088_delay_us(1000);
+    }
+}
+
+void BMI088_delay_us(uint16_t us)
+{
+    /* 基于 SysTick 的精确微秒延时，适配 168 MHz 主频 */
+    uint32_t ticks = 0;
+    uint32_t told  = 0;
+    uint32_t tnow  = 0;
+    uint32_t tcnt  = 0;
+    uint32_t reload = 0;
+
+    reload = SysTick->LOAD;
+    ticks  = (uint32_t)us * 168u;   /* 168 MHz：1 µs = 168 个计数 */
+    told   = SysTick->VAL;
+
+    while (1)
+    {
+        tnow = SysTick->VAL;
+        if (tnow != told)
+        {
+            if (tnow < told)
+                tcnt += told - tnow;
+            else
+                tcnt += reload - tnow + told;
+            told = tnow;
+            if (tcnt >= ticks)
+                break;
+        }
+    }
+}
+
+/* ===== 加速度计片选：CS1 = PC4 ===================================== */
+void BMI088_ACCEL_NS_L(void)
+{
+    HAL_GPIO_WritePin(CS1_GPIO_Port, CS1_Pin, GPIO_PIN_RESET);
+}
+
+void BMI088_ACCEL_NS_H(void)
+{
+    HAL_GPIO_WritePin(CS1_GPIO_Port, CS1_Pin, GPIO_PIN_SET);
+}
+
+/* ===== 陀螺仪片选：CS2 = PB1 ======================================= */
+void BMI088_GYRO_NS_L(void)
+{
+    HAL_GPIO_WritePin(CS2_GPIO_Port, CS2_Pin, GPIO_PIN_RESET);
+}
+
+void BMI088_GYRO_NS_H(void)
+{
+    HAL_GPIO_WritePin(CS2_GPIO_Port, CS2_Pin, GPIO_PIN_SET);
+}
+
+/* ===== SPI1 单字节阻塞读写（仅 init 阶段使用） ====================== */
+uint8_t BMI088_read_write_byte(uint8_t txdata)
+{
+    uint8_t rx_data;
+    HAL_SPI_TransmitReceive(&hspi1, &txdata, &rx_data, 1, 1000);
+    return rx_data;
+}
+
+/* ===== 非阻塞 DMA 接口 ============================================== */
+
+volatile BMI088_DMA_State_t  bmi088_dma_state  = BMI088_DMA_IDLE;
+volatile BMI088_DMA_Target_t bmi088_dma_target = BMI088_DMA_TARGET_NONE;
+uint8_t bmi088_dma_tx_buf[8];
+uint8_t bmi088_dma_rx_buf[8];
+
+/*
+ * 发起 DMA 传输，CS 由调用方在此之前拉低。
+ * 传输完成后在回调里拉高 CS、置 DONE。
+ */
+void BMI088_spi_dma_start(uint8_t *tx, uint8_t *rx, uint16_t len,
+                          BMI088_DMA_Target_t target)
+{
+    bmi088_dma_state  = BMI088_DMA_BUSY;
+    bmi088_dma_target = target;
+    HAL_SPI_TransmitReceive_DMA(&hspi1, tx, rx, len);
+}
+
+/*
+ * SPI DMA 完成回调（HAL 弱函数重写）。
+ * 拉高对应 CS，标记数据就绪。
+ */
+void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi)
+{
+    if (hspi->Instance != SPI1)
+        return;
+
+    /* 根据当前目标拉高对应 CS */
+    switch (bmi088_dma_target)
+    {
+        case BMI088_DMA_TARGET_ACCEL:
+        case BMI088_DMA_TARGET_TEMP:
+            BMI088_ACCEL_NS_H();
+            break;
+        case BMI088_DMA_TARGET_GYRO:
+            BMI088_GYRO_NS_H();
+            break;
+        default:
+            break;
+    }
+
+    bmi088_dma_state = BMI088_DMA_DONE;
+}
