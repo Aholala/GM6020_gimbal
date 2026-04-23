@@ -33,24 +33,36 @@ enable_language(C ASM)
 
 # Create an executable object type
 add_executable(${CMAKE_PROJECT_NAME}
-        User/Module/module_pid.c
-        User/Module/module_pid.h
         User/Bsp/bsp_can.c
         User/Bsp/bsp_can.h
-        User/Bsp/struct_typedef.h
-        User/Module/BMI088driver.c
-        User/Module/BMI088driver.h
-        User/Module/BMI088reg.h
-        User/Module/BMI088Middleware.c
-        User/Module/BMI088Middleware.h
-        User/Module/MahonyAHRS.h
-        User/Module/MahonyAHRS.c
-        User/Module/Config.c
-        User/Module/AKF.c
         User/Bsp/bsp_usb.c
         User/Bsp/bsp_usb.h
+        User/Bsp/bsp_BMI088driver.c
+        User/Bsp/bsp_BMI088driver.h
+        User/Bsp/struct_typedef.h
 
+        User/Module/module_pid.c
+        User/Module/module_pid.h
+        User/Module/module_BMI088reg.h
+        User/Module/module_BMI088Middleware.c
+        User/Module/module_BMI088Middleware.h
 
+        User/Lib/lib_MahonyAHRS.h
+        User/Lib/lib_MahonyAHRS.c
+        User/Lib/lib_Config.c
+        User/Lib/lib_Config.h
+        User/Lib/lib_AKF.c
+        User/Lib/lib_AKF.h
+
+        User/App/app_sentry_common.h
+        User/App/app_sentry_globals.c
+        User/App/app_sentry_globals.h
+        User/App/app_imu_task.c
+        User/App/app_imu_task.h
+        User/App/app_autoaim_task.c
+        User/App/app_autoaim_task.h
+        User/App/app_sentry_task.c
+        User/App/app_sentry_task.h
 )
 
 # Add STM32CubeMX generated sources
@@ -58,25 +70,27 @@ add_subdirectory(cmake/stm32cubemx)
 
 # Link directories setup
 target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
-    # Add user defined library search paths
+        # Add user defined library search paths
 )
 
 # Add sources to executable
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
-    # Add user sources here
+        # Add user sources here
 )
 
 # Add include paths
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
         User/Bsp
         User/Module
+        User/Lib
+        User/App
 
-    # Add user defined include paths
+        # Add user defined include paths
 )
 
 # Add project symbols (macros)
 target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
-    # Add user defined symbols
+        # Add user defined symbols
 )
 
 # Remove wrong libob.a library dependency when using cpp files
@@ -84,7 +98,7 @@ list(REMOVE_ITEM CMAKE_C_IMPLICIT_LINK_LIBRARIES ob)
 
 # Add linked libraries
 target_link_libraries(${CMAKE_PROJECT_NAME}
-    stm32cubemx
+        stm32cubemx
 
-    # Add user defined libraries
+        # Add user defined libraries
 )

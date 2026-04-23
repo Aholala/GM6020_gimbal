@@ -1,13 +1,13 @@
 #include "main.h"
-#include "AKF.h"
+#include "lib_AKF.h"
 #include "math.h"
 #include "stdint.h"
 #include "string.h"
 
 /* ======================================================================
- * Welford ÔÚÏß·½²î£¨ÖÐ¶Ï°æ£©
- * ¹©ÐèÒªÔÚ¶¨Ê±Æ÷ÖÐ¶ÏÀï³ÖÐø²É¼¯·½²îµÄ³¡ºÏÊ¹ÓÃ¡£
- * BMI088 ¹¤³ÌÄ¿Ç°ÔÚ main.c Ð£×¼¶ÎÄÚÁªÊ¹ÓÃ£¬´Ë´¦±£ÁôÒÔ±¸À©Õ¹¡£
+ * Welford åœ¨çº¿æ–¹å·®ï¼ˆä¸­æ–­ç‰ˆï¼‰
+ * ä¾›éœ€è¦åœ¨å®šæ—¶å™¨ä¸­æ–­é‡ŒæŒç»­é‡‡é›†æ–¹å·®çš„åœºåˆä½¿ç”¨ã€‚
+ * BMI088 å·¥ç¨‹ç›®å‰åœ¨ main.c æ ¡å‡†æ®µå†…è”ä½¿ç”¨ï¼Œæ­¤å¤„ä¿ç•™ä»¥å¤‡æ‰©å±•ã€‚
  * ====================================================================== */
 void VarianceCalc_Init(VarianceCalc_t *vc, uint16_t target_count)
 {
@@ -20,9 +20,9 @@ void VarianceCalc_Init(VarianceCalc_t *vc, uint16_t target_count)
 }
 
 /**
- * @brief  ÖÐ¶ÏÖÐ¸üÐÂ 1 ¸öÑù±¾£¨¿ì½ø¿ì³ö£¬ÎÞ×èÈû£©
- * @param  vc:        ¾ä±úÖ¸Õë
- * @param  new_value: µ±Ç°²ÉÑùÖµ
+ * @brief  ä¸­æ–­ä¸­æ›´æ–° 1 ä¸ªæ ·æœ¬ï¼ˆå¿«è¿›å¿«å‡ºï¼Œæ— é˜»å¡žï¼‰
+ * @param  vc:        å¥æŸ„æŒ‡é’ˆ
+ * @param  new_value: å½“å‰é‡‡æ ·å€¼
  */
 void VarianceCalc_UpdateIRQ(VarianceCalc_t *vc, float new_value)
 {
@@ -49,8 +49,8 @@ void VarianceCalc_UpdateIRQ(VarianceCalc_t *vc, float new_value)
 }
 
 /**
- * @brief  Ö÷Ñ­»·¶ÁÈ¡·½²î½á¹û£¨¶ÁÈ¡ºó×Ô¶¯ÖØÖÃ£©
- * @retval 1=ÓÐÐÂ½á¹û£¬0=Î´¾ÍÐ÷
+ * @brief  ä¸»å¾ªçŽ¯è¯»å–æ–¹å·®ç»“æžœï¼ˆè¯»å–åŽè‡ªåŠ¨é‡ç½®ï¼‰
+ * @retval 1=æœ‰æ–°ç»“æžœï¼Œ0=æœªå°±ç»ª
  */
 uint8_t VarianceCalc_GetResult(VarianceCalc_t *vc, float *out_variance)
 {
@@ -67,15 +67,15 @@ uint8_t VarianceCalc_GetResult(VarianceCalc_t *vc, float *out_variance)
 }
 
 /* ======================================================================
- * ÍÓÂÝÒÇ×ÔÊÊÓ¦¿¨¶ûÂüÂË²¨£¨AKF£©
+ * é™€èžºä»ªè‡ªé€‚åº”å¡å°”æ›¼æ»¤æ³¢ï¼ˆAKFï¼‰
  * ====================================================================== */
 
 /**
- * @brief  AKF ³õÊ¼»¯
- * @param  x0: ³õÊ¼×´Ì¬¹À¼ÆÖµ£¨¾²Ö¹Ê±ÌîÁãÆ«¾ùÖµ£©
- * @param  P0: ³õÊ¼Ð­·½²î£¨ÍÆ¼ö 1.0f£©
- * @param  Q0: ³õÊ¼ÏµÍ³ÔëÉù·½²î£¨ÍÆ¼ö 1e-5f£¬ºóÐø×ÔÊÊÓ¦¸üÐÂ£©
- * @param  R0: Á¿²âÔëÉù·½²î£¨¾²Ö¹±ê¶¨·½²î£¬ÔËÐÐÈ«³Ì¹Ì¶¨²»±ä£©
+ * @brief  AKF åˆå§‹åŒ–
+ * @param  x0: åˆå§‹çŠ¶æ€ä¼°è®¡å€¼ï¼ˆé™æ­¢æ—¶å¡«é›¶åå‡å€¼ï¼‰
+ * @param  P0: åˆå§‹åæ–¹å·®ï¼ˆæŽ¨è 1.0fï¼‰
+ * @param  Q0: åˆå§‹ç³»ç»Ÿå™ªå£°æ–¹å·®ï¼ˆæŽ¨è 1e-5fï¼ŒåŽç»­è‡ªé€‚åº”æ›´æ–°ï¼‰
+ * @param  R0: é‡æµ‹å™ªå£°æ–¹å·®ï¼ˆé™æ­¢æ ‡å®šæ–¹å·®ï¼Œè¿è¡Œå…¨ç¨‹å›ºå®šä¸å˜ï¼‰
  */
 void Gyro_AKF_Init(Gyro_AKF_HandleTypeDef *akf, float x0, float P0, float Q0, float R0)
 {
@@ -84,33 +84,33 @@ void Gyro_AKF_Init(Gyro_AKF_HandleTypeDef *akf, float x0, float P0, float Q0, fl
     akf->x_hat      = x0;
     akf->P          = P0;
     akf->Q          = Q0;
-    *(float *)&akf->R = R0;   /* const ³ÉÔ±Ö»ÄÜÕâÑùÐ´Èë */
+    *(float *)&akf->R = R0;   /* const æˆå‘˜åªèƒ½è¿™æ ·å†™å…¥ */
 
     akf->window_idx  = 0;
     akf->window_full = 0;
 }
 
 /**
- * @brief  AKF µ¥²½¸üÐÂ
- * @param  z: µ±Ç°Ô­Ê¼½ÇËÙ¶ÈÁ¿²âÖµ
- * @retval ÂË²¨ºóµÄ½ÇËÙ¶È×îÓÅ¹À¼ÆÖµ
+ * @brief  AKF å•æ­¥æ›´æ–°
+ * @param  z: å½“å‰åŽŸå§‹è§’é€Ÿåº¦é‡æµ‹å€¼
+ * @retval æ»¤æ³¢åŽçš„è§’é€Ÿåº¦æœ€ä¼˜ä¼°è®¡å€¼
  */
 float Gyro_AKF_Update(Gyro_AKF_HandleTypeDef *akf, float z)
 {
-    /* ²½Öè1£º×´Ì¬Ò»²½Ô¤²â  X_{k|k-1} = X_{k-1} */
+    /* æ­¥éª¤1ï¼šçŠ¶æ€ä¸€æ­¥é¢„æµ‹  X_{k|k-1} = X_{k-1} */
     akf->x_pre = akf->x_hat;
 
-    /* ²½Öè3£ºÐ­·½²îÒ»²½Ô¤²â  P_{k|k-1} = P_{k-1} + Q_k */
+    /* æ­¥éª¤3ï¼šåæ–¹å·®ä¸€æ­¥é¢„æµ‹  P_{k|k-1} = P_{k-1} + Q_k */
     akf->P_pre = akf->P + akf->Q;
 
-    /* ²½Öè4£º¿¨¶ûÂüÔöÒæ  K = P_{k|k-1} / (P_{k|k-1} + R) */
+    /* æ­¥éª¤4ï¼šå¡å°”æ›¼å¢žç›Š  K = P_{k|k-1} / (P_{k|k-1} + R) */
     float denom = akf->P_pre + akf->R;
     akf->K = (fabsf(denom) < 1e-10f) ? 0.0f : akf->P_pre / denom;
 
-    /* ÐÂÏ¢ */
+    /* æ–°æ¯ */
     akf->IV = z - akf->x_pre;
 
-    /* ¸üÐÂÐÂÏ¢»¬¶¯´°¿Ú */
+    /* æ›´æ–°æ–°æ¯æ»‘åŠ¨çª—å£ */
     akf->iv_window[akf->window_idx] = akf->IV;
     akf->window_idx++;
     if (akf->window_idx >= WINDOW_SIZE)
@@ -119,7 +119,7 @@ float Gyro_AKF_Update(Gyro_AKF_HandleTypeDef *akf, float z)
         akf->window_full = 1;
     }
 
-    /* ²½Öè6£º×ÔÊÊÓ¦¸üÐÂ Q£¨´°¿ÚÂúºóÆô¶¯£© */
+    /* æ­¥éª¤6ï¼šè‡ªé€‚åº”æ›´æ–° Qï¼ˆçª—å£æ»¡åŽå¯åŠ¨ï¼‰ */
     if (akf->window_full)
     {
         akf->C = 0.0f;
@@ -132,10 +132,10 @@ float Gyro_AKF_Update(Gyro_AKF_HandleTypeDef *akf, float z)
             akf->Q = 1e-8f;
     }
 
-    /* ²½Öè2£º×´Ì¬¸üÐÂ  X_k = X_{k|k-1} + K * IV */
+    /* æ­¥éª¤2ï¼šçŠ¶æ€æ›´æ–°  X_k = X_{k|k-1} + K * IV */
     akf->x_hat = akf->x_pre + akf->K * akf->IV;
 
-    /* ²½Öè5£ºÐ­·½²î¸üÐÂ  P_k = (1 - K) * P_{k|k-1} */
+    /* æ­¥éª¤5ï¼šåæ–¹å·®æ›´æ–°  P_k = (1 - K) * P_{k|k-1} */
     akf->P = (1.0f - akf->K) * akf->P_pre;
     if (akf->P < 0.0f)
         akf->P = 1e-8f;

@@ -8,7 +8,7 @@
 
 // Header files
 
-#include "MahonyAHRS.h"
+#include "lib_MahonyAHRS.h"
 #include <math.h>
 
 //---------------------------------------------------------------------------------------------------

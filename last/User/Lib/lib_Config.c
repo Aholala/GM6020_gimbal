@@ -1,53 +1,53 @@
 #include "math.h"
-#include "AKF.h"
-#include "Config.h"
+#include "lib_AKF.h"
+#include "lib_Config.h"
 #include <stdlib.h>
 #include <time.h>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846f
 #endif
-/***************************½Ç¶Èµ¥Î»»»Ëã********************************/
+/***************************è§’åº¦å•ä½æ¢ç®—********************************/
 
-#define DEG2RAD  0.017453292519943295f  // ¶È×ª»¡¶È
-#define RAD2DEG  57.29577951308232f     // »¡¶È×ª¶È
+#define DEG2RAD  0.017453292519943295f  // åº¦è½¬å¼§åº¦
+#define RAD2DEG  57.29577951308232f     // å¼§åº¦è½¬åº¦
 /*********************************************************************/
 
-// ¾²Ì¬ÅĞ¶Ï£º½ÇËÙ¶È²¨¶¯Ğ¡ÓÚãĞÖµ
-#define STABILITY_THRESHOLD  0.001f   // ½ÇËÙ¶È±ä»¯ãĞÖµ£¨rad/s£©£¬Ğ¡ÓÚ´ËÖµÈÏÎª¾²Ö¹
-#define STABILITY_COUNT      100     // ¾²Ö¹¼ÆÊıÆ÷ãĞÖµ£¨1msÅĞ¶ÏÒ»´Î£¬100ms¼´ÈÏÎª¾²Ö¹£©
+// é™æ€åˆ¤æ–­ï¼šè§’é€Ÿåº¦æ³¢åŠ¨å°äºé˜ˆå€¼
+#define STABILITY_THRESHOLD  0.001f   // è§’é€Ÿåº¦å˜åŒ–é˜ˆå€¼ï¼ˆrad/sï¼‰ï¼Œå°äºæ­¤å€¼è®¤ä¸ºé™æ­¢
+#define STABILITY_COUNT      100     // é™æ­¢è®¡æ•°å™¨é˜ˆå€¼ï¼ˆ1msåˆ¤æ–­ä¸€æ¬¡ï¼Œ100mså³è®¤ä¸ºé™æ­¢ï¼‰
 
-/************************** MahonyÂË²¨Æ÷²ÎÊı **************************/
-// Mahony×ÔÊÊÓ¦²ÎÊı
-#define KP_STATIC  4.0f    // ¾²Ö¹Ê±µÄ±ÈÀıÔöÒæ
-#define KP_DYNAMIC 0.01f   // ÔË¶¯Ê±µÄ±ÈÀıÔöÒæ
-#define KI_STATIC  0.002f  // ¾²Ö¹Ê±µÄ»ı·ÖÔöÒæ
-#define KI_DYNAMIC 0.0f    // ÔË¶¯Ê±µÄ»ı·ÖÔöÒæ
-#define INTEGRAL_MAX_LIMIT  0.05f  // »ı·ÖÏîÉÏÏŞ£¨rad/s£©
-#define INTEGRAL_MIN_LIMIT -0.05f  // »ı·ÖÏîÏÂÏŞ
+/************************** Mahonyæ»¤æ³¢å™¨å‚æ•° **************************/
+// Mahonyè‡ªé€‚åº”å‚æ•°
+#define KP_STATIC  4.0f    // é™æ­¢æ—¶çš„æ¯”ä¾‹å¢ç›Š
+#define KP_DYNAMIC 0.01f   // è¿åŠ¨æ—¶çš„æ¯”ä¾‹å¢ç›Š
+#define KI_STATIC  0.002f  // é™æ­¢æ—¶çš„ç§¯åˆ†å¢ç›Š
+#define KI_DYNAMIC 0.0f    // è¿åŠ¨æ—¶çš„ç§¯åˆ†å¢ç›Š
+#define INTEGRAL_MAX_LIMIT  0.05f  // ç§¯åˆ†é¡¹ä¸Šé™ï¼ˆrad/sï¼‰
+#define INTEGRAL_MIN_LIMIT -0.05f  // ç§¯åˆ†é¡¹ä¸‹é™
 
-// ÍÓÂİÒÇ¾²Ì¬¼ì²âãĞÖµ¼°³ÙÖÍ£¨ÓÃÓÚZUPT£©
-#define GYRO_STATIC_THRESHOLD  2.0f  // ¾²Ì¬½ÇËÙ¶ÈãĞÖµ£¨deg/s£©
-#define GYRO_HYSTERESIS        0.5f  // ³ÙÖÍÁ¿
+// é™€èºä»ªé™æ€æ£€æµ‹é˜ˆå€¼åŠè¿Ÿæ»ï¼ˆç”¨äºZUPTï¼‰
+#define GYRO_STATIC_THRESHOLD  2.0f  // é™æ€è§’é€Ÿåº¦é˜ˆå€¼ï¼ˆdeg/sï¼‰
+#define GYRO_HYSTERESIS        0.5f  // è¿Ÿæ»é‡
 
-/************************** Ìİ¶È²¹³¥¹¦ÄÜ¿ª¹Ø **************************/
-#define ENABLE_GRADIENT_COMPENSATE  1  // 1=Ê¹ÄÜÌİ¶È²¹³¥£¬0=½ûÖ¹
-#define COMPENSATE_INTERVAL         10  // Ã¿10msÖ´ĞĞÒ»´ÎÌİ¶ÈÏÂ½µ²¹³¥
-/************************** Ìİ¶È²¹³¥°²È«²ÎÊı **************************/
-#define COMPENSATE_STEP_SAFE       0.0001f // ²¹³¥²½³¤£¨°²È«Ğ¡Öµ£©
-#define BIAS_MAX_LIMIT_SAFE        1.0f     // Æ«ÖÃÉÏÏŞ
-#define BIAS_MIN_LIMIT_SAFE       -1.0f     // Æ«ÖÃÏÂÏŞ
+/************************** æ¢¯åº¦è¡¥å¿åŠŸèƒ½å¼€å…³ **************************/
+#define ENABLE_GRADIENT_COMPENSATE  1  // 1=ä½¿èƒ½æ¢¯åº¦è¡¥å¿ï¼Œ0=ç¦æ­¢
+#define COMPENSATE_INTERVAL         10  // æ¯10msæ‰§è¡Œä¸€æ¬¡æ¢¯åº¦ä¸‹é™è¡¥å¿
+/************************** æ¢¯åº¦è¡¥å¿å®‰å…¨å‚æ•° **************************/
+#define COMPENSATE_STEP_SAFE       0.0001f // è¡¥å¿æ­¥é•¿ï¼ˆå®‰å…¨å°å€¼ï¼‰
+#define BIAS_MAX_LIMIT_SAFE        1.0f     // åç½®ä¸Šé™
+#define BIAS_MIN_LIMIT_SAFE       -1.0f     // åç½®ä¸‹é™
 /**************************************************************************/
 
-/* IMU_Calibrate_Accel_Offset: MPU6050 ×¨ÓÃ£¬BMI088 ¹¤³Ì²»Ê¹ÓÃ£¬ÒÑ×¢ÊÍ */
+/* IMU_Calibrate_Accel_Offset: MPU6050 ä¸“ç”¨ï¼ŒBMI088 å·¥ç¨‹ä¸ä½¿ç”¨ï¼Œå·²æ³¨é‡Š */
 
 /**
- * @brief  ¾²Ì¬Ğ£×¼¼ÓËÙ¶È¼Æax¡¢ay£¬²ÉÑù100´ÎÈ¡Æ½¾ù
- * @param  ax_offset: ¼ÓËÙ¶È¼ÆxÖáÁãÆ«Êä³öÖ¸Õë
- * @param  ay_offset: ¼ÓËÙ¶È¼ÆyÖáÁãÆ«Êä³öÖ¸Õë
- * @note   1. µ÷ÓÃÇ°ĞèÈ·±£IMUÒÑÍ¨¹ıI2C/SPIÕı³£Í¨ĞÅ
- * @note   2. Ğ£×¼¹ı³ÌÖĞIMUÓ¦±£³Ö¾ø¶Ô¾²Ö¹
- * @note   3. Ğ£×¼Íê³ÉºóÁãÆ«Öµ»á±»ÓÃÓÚºóĞø×ËÌ¬½âËã
+ * @brief  é™æ€æ ¡å‡†åŠ é€Ÿåº¦è®¡axã€ayï¼Œé‡‡æ ·100æ¬¡å–å¹³å‡
+ * @param  ax_offset: åŠ é€Ÿåº¦è®¡xè½´é›¶åè¾“å‡ºæŒ‡é’ˆ
+ * @param  ay_offset: åŠ é€Ÿåº¦è®¡yè½´é›¶åè¾“å‡ºæŒ‡é’ˆ
+ * @note   1. è°ƒç”¨å‰éœ€ç¡®ä¿IMUå·²é€šè¿‡I2C/SPIæ­£å¸¸é€šä¿¡
+ * @note   2. æ ¡å‡†è¿‡ç¨‹ä¸­IMUåº”ä¿æŒç»å¯¹é™æ­¢
+ * @note   3. æ ¡å‡†å®Œæˆåé›¶åå€¼ä¼šè¢«ç”¨äºåç»­å§¿æ€è§£ç®—
  */
 
 void SC_Data_Init(SC_Data* SCData)
@@ -58,60 +58,60 @@ void SC_Data_Init(SC_Data* SCData)
     SCData->gyro_x_bias = 0.0f;
     SCData->gyro_y_bias = 0.0f;
     SCData->gyro_z_bias = 0.0f;
-    SCData->is_calibrated = 0;  // Ä¬ÈÏÎ´Ğ£×¼
+    SCData->is_calibrated = 0;  // é»˜è®¤æœªæ ¡å‡†
 }
 
 void static_compensation(MPU_Data* MPU_Data, AKF_Data* gyro_AKF, SC_Data* SCData, Gyro_AKF_HandleTypeDef* AKF_X, Gyro_AKF_HandleTypeDef* AKF_Y, Gyro_AKF_HandleTypeDef* AKF_Z)
 {
-    // ¾²Ì¬²¹³¥£ºÀûÓÃAKFÂË²¨ºóµÄÍÓÂİÊı¾İ£¬ÔÚ¾²Ö¹Ê±¼ÆËãÁãÆ«
+    // é™æ€è¡¥å¿ï¼šåˆ©ç”¨AKFæ»¤æ³¢åçš„é™€èºæ•°æ®ï¼Œåœ¨é™æ­¢æ—¶è®¡ç®—é›¶å
     static float prev_gx = 0.0f, prev_gy = 0.0f, prev_gz = 0.0f;
     static uint16_t stable_cnt = 0;
 
-    // ÏÈ¶ÔÔ­Ê¼ÍÓÂİÊı¾İ½øĞĞAKFÂË²¨
+    // å…ˆå¯¹åŸå§‹é™€èºæ•°æ®è¿›è¡ŒAKFæ»¤æ³¢
     gyro_AKF->gyro_x_hat = Gyro_AKF_Update(AKF_X, MPU_Data->gx);
     gyro_AKF->gyro_y_hat = Gyro_AKF_Update(AKF_Y, MPU_Data->gy);
     gyro_AKF->gyro_z_hat = Gyro_AKF_Update(AKF_Z, MPU_Data->gz);
 
-    // ÁãÆ«Ğ£×¼Âß¼­
+    // é›¶åæ ¡å‡†é€»è¾‘
     if (SCData->is_calibrated == 0)
     {
-        // ====================== Î´Ğ£×¼£ºÅĞ¶ÏÊÇ·ñ¾²Ö¹ ======================
+        // ====================== æœªæ ¡å‡†ï¼šåˆ¤æ–­æ˜¯å¦é™æ­¢ ======================
         float dx = fabs(gyro_AKF->gyro_x_hat - prev_gx);
         float dy = fabs(gyro_AKF->gyro_y_hat - prev_gy);
         float dz = fabs(gyro_AKF->gyro_z_hat - prev_gz);
 
-        // ¸üĞÂÇ°Ò»Ê±¿ÌÖµ
+        // æ›´æ–°å‰ä¸€æ—¶åˆ»å€¼
         prev_gx = gyro_AKF->gyro_x_hat;
         prev_gy = gyro_AKF->gyro_y_hat;
         prev_gz = gyro_AKF->gyro_z_hat;
 
-        // ÅĞ¶ÏÈı¸öÖáÊÇ·ñÍ¬Ê±ÎÈ¶¨
+        // åˆ¤æ–­ä¸‰ä¸ªè½´æ˜¯å¦åŒæ—¶ç¨³å®š
         if (dx < STABILITY_THRESHOLD && dy < STABILITY_THRESHOLD && dz < STABILITY_THRESHOLD)
         {
             stable_cnt++;
             if (stable_cnt >= STABILITY_COUNT)
             {
-                // ¾²Ö¹×ã¹»³¤Ê±¼ä£¬¼ÇÂ¼µ±Ç°ÂË²¨Öµ×÷ÎªÁãÆ«
+                // é™æ­¢è¶³å¤Ÿé•¿æ—¶é—´ï¼Œè®°å½•å½“å‰æ»¤æ³¢å€¼ä½œä¸ºé›¶å
                 SCData->gyro_x_bias = gyro_AKF->gyro_x_hat;
                 SCData->gyro_y_bias = gyro_AKF->gyro_y_hat;
                 SCData->gyro_z_bias = gyro_AKF->gyro_z_hat;
-                SCData->is_calibrated = 1;  // Ğ£×¼Íê³É£¬ºóĞø²»ÔÙÖØ¸´Ğ£×¼
-                stable_cnt = 0;               // ÖØÖÃ¼ÆÊıÆ÷
+                SCData->is_calibrated = 1;  // æ ¡å‡†å®Œæˆï¼Œåç»­ä¸å†é‡å¤æ ¡å‡†
+                stable_cnt = 0;               // é‡ç½®è®¡æ•°å™¨
             }
         }
         else
         {
-            stable_cnt = 0;  // ÔË¶¯×´Ì¬£¬ÖØÖÃ¼ÆÊıÆ÷
+            stable_cnt = 0;  // è¿åŠ¨çŠ¶æ€ï¼Œé‡ç½®è®¡æ•°å™¨
         }
 
-        // Ğ£×¼Íê³ÉÇ°£¬ÔİÓÃµ±Ç°Öµ¼õÁãÆ«£¨ÁãÆ«³õÊ¼Îª0£©
+        // æ ¡å‡†å®Œæˆå‰ï¼Œæš‚ç”¨å½“å‰å€¼å‡é›¶åï¼ˆé›¶ååˆå§‹ä¸º0ï¼‰
         SCData->gyro_x_SC = gyro_AKF->gyro_x_hat - SCData->gyro_x_bias;
         SCData->gyro_y_SC = gyro_AKF->gyro_y_hat - SCData->gyro_y_bias;
         SCData->gyro_z_SC = gyro_AKF->gyro_z_hat - SCData->gyro_z_bias;
     }
     else
     {
-        // ====================== ÒÑĞ£×¼£ºÖ±½Ó¿Û³ıÁãÆ« ======================
+        // ====================== å·²æ ¡å‡†ï¼šç›´æ¥æ‰£é™¤é›¶å ======================
         SCData->gyro_x_SC = gyro_AKF->gyro_x_hat - SCData->gyro_x_bias;
         SCData->gyro_y_SC = gyro_AKF->gyro_y_hat - SCData->gyro_y_bias;
         SCData->gyro_z_SC = gyro_AKF->gyro_z_hat - SCData->gyro_z_bias;
@@ -119,78 +119,78 @@ void static_compensation(MPU_Data* MPU_Data, AKF_Data* gyro_AKF, SC_Data* SCData
 }
 
 /**************************************************************************
- * º¯ÊıÃû£ºMahony_Init
- * ¹¦ÄÜ£º³õÊ¼»¯Mahony×ËÌ¬½âËã½á¹¹Ìå
- * ²ÎÊı£ºahrs ¡ª¡ª ×ËÌ¬½âËã½á¹¹ÌåÖ¸Õë
+ * å‡½æ•°åï¼šMahony_Init
+ * åŠŸèƒ½ï¼šåˆå§‹åŒ–Mahonyå§¿æ€è§£ç®—ç»“æ„ä½“
+ * å‚æ•°ï¼šahrs â€”â€” å§¿æ€è§£ç®—ç»“æ„ä½“æŒ‡é’ˆ
  **************************************************************************/
 void Mahony_Init(Mahony_AHRS_t *ahrs)
 {
-    // 1. ³õÊ¼»¯ËÄÔªÊıÎªµ¥Î»ËÄÔªÊı
+    // 1. åˆå§‹åŒ–å››å…ƒæ•°ä¸ºå•ä½å››å…ƒæ•°
     ahrs->q0 = 1.0f;
     ahrs->q1 = 0.0f;
     ahrs->q2 = 0.0f;
     ahrs->q3 = 0.0f;
 
-    // 2. ÇåÁã»ı·ÖÎó²î
+    // 2. æ¸…é›¶ç§¯åˆ†è¯¯å·®
     ahrs->exInt = 0.0f;
     ahrs->eyInt = 0.0f;
     ahrs->ezInt = 0.0f;
 
-    // 3. Æ½»¬±äÁ¿³õÊ¼»¯
+    // 3. å¹³æ»‘å˜é‡åˆå§‹åŒ–
     ahrs->delta_acc_smooth = 0.0f;
     ahrs->gyro_energy_smooth = 0.0f;
     ahrs->alpha_smooth = 0.0f;
 
-    // Æ«º½½ÇÏà¹Ø±äÁ¿¹éÁã
+    // åèˆªè§’ç›¸å…³å˜é‡å½’é›¶
     ahrs->yaw_bias = 0.0f;
     ahrs->yaw_static_ref = 0.0f;
     ahrs->yaw_locked = 0;
 }
 
 /**************************************************************************
- * º¯ÊıÃû£ºIs_Really_Static
- * ¹¦ÄÜ£º¸ù¾İÍÓÂİÒÇĞ£×¼ºóµÄÊı¾İÅĞ¶ÏIMUÊÇ·ñÕæÕı¾²Ö¹£¨´ø³ÙÖÍ£©
- * ²ÎÊı£ºgx_sc, gy_sc, gz_sc ¡ª¡ª Ğ£×¼ºóµÄÍÓÂİÒÇ½ÇËÙ¶È£¨deg/s£©
- * ·µ»Ø£º1=¾²Ö¹£¬0=ÔË¶¯
- * ËµÃ÷£ºÊµ¼ÊÊ¹ÓÃÊ±´«Èë SC_Data ÖĞµÄ gyro_x_SC µÈ
+ * å‡½æ•°åï¼šIs_Really_Static
+ * åŠŸèƒ½ï¼šæ ¹æ®é™€èºä»ªæ ¡å‡†åçš„æ•°æ®åˆ¤æ–­IMUæ˜¯å¦çœŸæ­£é™æ­¢ï¼ˆå¸¦è¿Ÿæ»ï¼‰
+ * å‚æ•°ï¼šgx_sc, gy_sc, gz_sc â€”â€” æ ¡å‡†åçš„é™€èºä»ªè§’é€Ÿåº¦ï¼ˆdeg/sï¼‰
+ * è¿”å›ï¼š1=é™æ­¢ï¼Œ0=è¿åŠ¨
+ * è¯´æ˜ï¼šå®é™…ä½¿ç”¨æ—¶ä¼ å…¥ SC_Data ä¸­çš„ gyro_x_SC ç­‰
  **************************************************************************/
 uint8_t Is_Really_Static(float gx_sc, float gy_sc, float gz_sc)
 {
     static uint8_t is_static_last = 1;
 
-    // 1. ¼ÆËãµ±Ç°½ÇËÙ¶ÈÄ£Öµ
+    // 1. è®¡ç®—å½“å‰è§’é€Ÿåº¦æ¨¡å€¼
     float gyro_norm = sqrt(gx_sc*gx_sc + gy_sc*gy_sc + gz_sc*gz_sc);
     uint8_t gyro_static = 0;
 
-    // 2. ³ÙÖÍ±È½Ï
+    // 2. è¿Ÿæ»æ¯”è¾ƒ
     if (is_static_last) {
-        // ÉÏÒ»Ê±¿Ì¾²Ö¹£º½øÈë¾²Ö¹ĞèÒªÄ£ÖµĞ¡ÓÚ£¨ãĞÖµ+³ÙÖÍ£©
+        // ä¸Šä¸€æ—¶åˆ»é™æ­¢ï¼šè¿›å…¥é™æ­¢éœ€è¦æ¨¡å€¼å°äºï¼ˆé˜ˆå€¼+è¿Ÿæ»ï¼‰
         if (gyro_norm < (GYRO_STATIC_THRESHOLD + GYRO_HYSTERESIS)) {
             gyro_static = 1;
         }
     } else {
-        // ÉÏÒ»Ê±¿ÌÔË¶¯£º½øÈë¾²Ö¹ĞèÒªÄ£ÖµĞ¡ÓÚ£¨ãĞÖµ-³ÙÖÍ£©
+        // ä¸Šä¸€æ—¶åˆ»è¿åŠ¨ï¼šè¿›å…¥é™æ­¢éœ€è¦æ¨¡å€¼å°äºï¼ˆé˜ˆå€¼-è¿Ÿæ»ï¼‰
         if (gyro_norm < (GYRO_STATIC_THRESHOLD - GYRO_HYSTERESIS)) {
             gyro_static = 1;
         }
     }
 
-    // 3. ½öÓÃÍÓÂİÒÇÅĞ¶Ï£¬²»¿¼ÂÇ¼ÓËÙ¶È¼Æ£¨ÒòÎª¼ÓËÙ¶È¼ÆÒ×ÊÜÕñ¶¯¸ÉÈÅ£©
+    // 3. ä»…ç”¨é™€èºä»ªåˆ¤æ–­ï¼Œä¸è€ƒè™‘åŠ é€Ÿåº¦è®¡ï¼ˆå› ä¸ºåŠ é€Ÿåº¦è®¡æ˜“å—æŒ¯åŠ¨å¹²æ‰°ï¼‰
     uint8_t is_static = gyro_static;
     is_static_last = is_static;
     return is_static;
 }
 
 /**************************************************************************
- * º¯ÊıÃû£ºMahony_Init_With_Calibration
- * ¹¦ÄÜ£ºÀûÓÃ³õÊ¼¼ÓËÙ¶È¼ÆÊı¾İ¼ÆËãRoll/Pitch²¢³õÊ¼»¯ËÄÔªÊı£¨²»ÒÀÀµYaw£©
- * ²ÎÊı£ºahrs ¡ª¡ª ×ËÌ¬½âËã½á¹¹Ìå
- *       ax, ay, az ¡ª¡ª ¼ÓËÙ¶È¼ÆÔ­Ê¼Êı¾İ£¨µ¥Î»£ºg£©
- * ËµÃ÷£ºÊÊÓÃÓÚÉÏµç¾²Ö¹Ê±µ÷ÓÃ£¬¿É¿ìËÙ»ñµÃË®Æ½×ËÌ¬
+ * å‡½æ•°åï¼šMahony_Init_With_Calibration
+ * åŠŸèƒ½ï¼šåˆ©ç”¨åˆå§‹åŠ é€Ÿåº¦è®¡æ•°æ®è®¡ç®—Roll/Pitchå¹¶åˆå§‹åŒ–å››å…ƒæ•°ï¼ˆä¸ä¾èµ–Yawï¼‰
+ * å‚æ•°ï¼šahrs â€”â€” å§¿æ€è§£ç®—ç»“æ„ä½“
+ *       ax, ay, az â€”â€” åŠ é€Ÿåº¦è®¡åŸå§‹æ•°æ®ï¼ˆå•ä½ï¼šgï¼‰
+ * è¯´æ˜ï¼šé€‚ç”¨äºä¸Šç”µé™æ­¢æ—¶è°ƒç”¨ï¼Œå¯å¿«é€Ÿè·å¾—æ°´å¹³å§¿æ€
  **************************************************************************/
 void Mahony_Init_With_Calibration(Mahony_AHRS_t *ahrs, float ax, float ay, float az)
 {
-    // 1. ¼ÓËÙ¶È¹éÒ»»¯
+    // 1. åŠ é€Ÿåº¦å½’ä¸€åŒ–
     float norm = sqrt(ax*ax + ay*ay + az*az);
     if (norm > 0.0001f) {
         ax /= norm;
@@ -198,11 +198,11 @@ void Mahony_Init_With_Calibration(Mahony_AHRS_t *ahrs, float ax, float ay, float
         az /= norm;
     }
 
-    // 2. ¼ÆËã³õÊ¼Roll/Pitch£¨»¡¶È£©
+    // 2. è®¡ç®—åˆå§‹Roll/Pitchï¼ˆå¼§åº¦ï¼‰
     float init_roll = atan2(ay, az);
     float init_pitch = -asin(ax);
 
-    // 3. ¸ù¾İRoll/Pitch¹¹ÔìËÄÔªÊı£¨ºöÂÔYaw£¬ÉèYaw³õÊ¼Îª0£©
+    // 3. æ ¹æ®Roll/Pitchæ„é€ å››å…ƒæ•°ï¼ˆå¿½ç•¥Yawï¼Œè®¾Yawåˆå§‹ä¸º0ï¼‰
     float cr = cos(init_roll * 0.5f);
     float sr = sin(init_roll * 0.5f);
     float cp = cos(init_pitch * 0.5f);
@@ -213,62 +213,62 @@ void Mahony_Init_With_Calibration(Mahony_AHRS_t *ahrs, float ax, float ay, float
     ahrs->q2 = cr * sp;
     ahrs->q3 = -sr * sp;
 
-    // 4. ÇåÁã»ı·ÖÎó²î
+    // 4. æ¸…é›¶ç§¯åˆ†è¯¯å·®
     ahrs->exInt = 0.0f;
     ahrs->eyInt = 0.0f;
     ahrs->ezInt = 0.0f;
 }
 
 /**************************************************************************
- * º¯ÊıÃû£ºMahony_Update
- * ¹¦ÄÜ£º¸Ä½ø°æMahony×ËÌ¬½âËã£¨ZUPTÆ«º½Æ¯ÒÆÒÖÖÆ + RK2ËÄÔªÊı»ı·Ö£©
- *       ÀûÓÃ¾²Ö¹¼ì²â¶¯Ì¬µ÷ÕûKP/KI£¬²¢¶ÔYawÁãÆ«½øĞĞÔÚÏß¹À¼Æ
- * ²ÎÊı£ºahrs ¡ª¡ª ×ËÌ¬½á¹¹Ìå
- *       ax, ay, az ¡ª¡ª ¼ÓËÙ¶È¼ÆÊı¾İ£¨µ¥Î»£ºg£©
- *       wx_deg, wy_deg, wz_deg ¡ª¡ª ÍÓÂİÒÇ½ÇËÙ¶È£¨µ¥Î»£º¶È/Ãë£©
- *       is_static ¡ª¡ª ¾²Ö¹±êÖ¾£¨1¾²Ö¹£¬0ÔË¶¯£©
- *       dt ¡ª¡ª ½âËãÖÜÆÚ£¨Ãë£©
+ * å‡½æ•°åï¼šMahony_Update
+ * åŠŸèƒ½ï¼šæ”¹è¿›ç‰ˆMahonyå§¿æ€è§£ç®—ï¼ˆZUPTåèˆªæ¼‚ç§»æŠ‘åˆ¶ + RK2å››å…ƒæ•°ç§¯åˆ†ï¼‰
+ *       åˆ©ç”¨é™æ­¢æ£€æµ‹åŠ¨æ€è°ƒæ•´KP/KIï¼Œå¹¶å¯¹Yawé›¶åè¿›è¡Œåœ¨çº¿ä¼°è®¡
+ * å‚æ•°ï¼šahrs â€”â€” å§¿æ€ç»“æ„ä½“
+ *       ax, ay, az â€”â€” åŠ é€Ÿåº¦è®¡æ•°æ®ï¼ˆå•ä½ï¼šgï¼‰
+ *       wx_deg, wy_deg, wz_deg â€”â€” é™€èºä»ªè§’é€Ÿåº¦ï¼ˆå•ä½ï¼šåº¦/ç§’ï¼‰
+ *       is_static â€”â€” é™æ­¢æ ‡å¿—ï¼ˆ1é™æ­¢ï¼Œ0è¿åŠ¨ï¼‰
+ *       dt â€”â€” è§£ç®—å‘¨æœŸï¼ˆç§’ï¼‰
  **************************************************************************/
 void Mahony_Update(Mahony_AHRS_t *ahrs, float ax, float ay, float az, float wx_deg, float wy_deg, float wz_deg, uint8_t is_static, float dt)
 {
     float halfvx, halfvy, halfvz;
     float halfex, halfey, halfez;
 
-    // 1. ¸ù¾İ¾²Ö¹×´Ì¬Ñ¡ÔñÂË²¨Æ÷ÔöÒæ
+    // 1. æ ¹æ®é™æ­¢çŠ¶æ€é€‰æ‹©æ»¤æ³¢å™¨å¢ç›Š
     float Kp = is_static ? KP_STATIC : KP_DYNAMIC;
     float Ki = is_static ? KI_STATIC : KI_DYNAMIC;
 
-    // 2. ½Ç¶Èµ¥Î»×ª»»£º¶È/Ãë -> »¡¶È/Ãë
+    // 2. è§’åº¦å•ä½è½¬æ¢ï¼šåº¦/ç§’ -> å¼§åº¦/ç§’
     float wx = wx_deg * DEG2RAD;
     float wy = wy_deg * DEG2RAD;
     float wz = wz_deg * DEG2RAD;
 
-    // ========== ZUPTÁãËÙĞŞÕı£º¾²Ö¹Ê±¹À¼ÆYawÖáÁãÆ« ==========
+    // ========== ZUPTé›¶é€Ÿä¿®æ­£ï¼šé™æ­¢æ—¶ä¼°è®¡Yawè½´é›¶å ==========
     if (is_static)
     {
-        // ¾²Ö¹Ê±²ÉÓÃÁ½ÖÖËÙÂÊĞŞÕı
-        const float KP_YAW_SLOW = 0.015f;  // µÍËÙĞŞÕıÏµÊı
-        const float KP_YAW_FAST = 0.02f;   // ¸ßËÙĞŞÕıÏµÊı
+        // é™æ­¢æ—¶é‡‡ç”¨ä¸¤ç§é€Ÿç‡ä¿®æ­£
+        const float KP_YAW_SLOW = 0.015f;  // ä½é€Ÿä¿®æ­£ç³»æ•°
+        const float KP_YAW_FAST = 0.02f;   // é«˜é€Ÿä¿®æ­£ç³»æ•°
 
-        // È¥³ıµ±Ç°ÁãÆ«ºóµÄZÖá½ÇËÙ¶È
+        // å»é™¤å½“å‰é›¶ååçš„Zè½´è§’é€Ÿåº¦
         float wz_corrected = wz - ahrs->yaw_bias;
 
-        // ¸ù¾İĞŞÕıºóµÄ½ÇËÙ¶È´óĞ¡Ñ¡ÔñĞŞÕıËÙ¶È
+        // æ ¹æ®ä¿®æ­£åçš„è§’é€Ÿåº¦å¤§å°é€‰æ‹©ä¿®æ­£é€Ÿåº¦
         float kp_yaw = (fabsf(wz_corrected) > 0.005f) ? KP_YAW_FAST : KP_YAW_SLOW;
 
-        // »ı·Ö·½Ê½¸üĞÂÁãÆ«£¨100%·´À¡£©
+        // ç§¯åˆ†æ–¹å¼æ›´æ–°é›¶åï¼ˆ100%åé¦ˆï¼‰
         ahrs->yaw_bias += kp_yaw * wz_corrected * dt;
 
-        // ÏŞÖÆÁãÆ«×î´óÖµ ¡À0.1rad/s £¨Ô¼¡À5.7¡ã/s£©
+        // é™åˆ¶é›¶åæœ€å¤§å€¼ Â±0.1rad/s ï¼ˆçº¦Â±5.7Â°/sï¼‰
         const float YAW_BIAS_MAX = 0.1f;
         ahrs->yaw_bias = (ahrs->yaw_bias > YAW_BIAS_MAX) ? YAW_BIAS_MAX : ahrs->yaw_bias;
         ahrs->yaw_bias = (ahrs->yaw_bias < -YAW_BIAS_MAX) ? -YAW_BIAS_MAX : ahrs->yaw_bias;
     }
-    // ÔË¶¯Ê±/¾²Ö¹Ê±¾ù¿Û³ıÁãÆ«£¨Ê¹ZUPTĞ§¹û³ÖĞø£©
+    // è¿åŠ¨æ—¶/é™æ­¢æ—¶å‡æ‰£é™¤é›¶åï¼ˆä½¿ZUPTæ•ˆæœæŒç»­ï¼‰
     wz -= ahrs->yaw_bias;
-    // ========== ZUPTĞŞÕı½áÊø ==========
+    // ========== ZUPTä¿®æ­£ç»“æŸ ==========
 
-    // 3. ¼ÓËÙ¶È¼Æ¹éÒ»»¯£¨ÓÃÓÚ¼ÆËã²Î¿¼ÏòÁ¿£©
+    // 3. åŠ é€Ÿåº¦è®¡å½’ä¸€åŒ–ï¼ˆç”¨äºè®¡ç®—å‚è€ƒå‘é‡ï¼‰
     float norm = sqrtf(ax*ax + ay*ay + az*az);
     if (norm > 0.0001f) {
         ax /= norm; ay /= norm; az /= norm;
@@ -276,17 +276,17 @@ void Mahony_Update(Mahony_AHRS_t *ahrs, float ax, float ay, float az, float wx_d
         return;
     }
 
-    // 4. ¸ù¾İµ±Ç°ËÄÔªÊı¼ÆËãÖØÁ¦¼ÓËÙ¶È¹À¼ÆÖµ£¨²Î¿¼ÏòÁ¿£©
+    // 4. æ ¹æ®å½“å‰å››å…ƒæ•°è®¡ç®—é‡åŠ›åŠ é€Ÿåº¦ä¼°è®¡å€¼ï¼ˆå‚è€ƒå‘é‡ï¼‰
     halfvx = ahrs->q1 * ahrs->q3 - ahrs->q0 * ahrs->q2;
     halfvy = ahrs->q0 * ahrs->q1 + ahrs->q2 * ahrs->q3;
     halfvz = ahrs->q0 * ahrs->q0 - 0.5f + ahrs->q3 * ahrs->q3;
 
-    // 5. ¼ÆËãÎó²î£¨Êµ²â¼ÓËÙ¶ÈÓë¹À¼Æ¼ÓËÙ¶ÈµÄ²æ»ı£©
+    // 5. è®¡ç®—è¯¯å·®ï¼ˆå®æµ‹åŠ é€Ÿåº¦ä¸ä¼°è®¡åŠ é€Ÿåº¦çš„å‰ç§¯ï¼‰
     halfex = (ay * halfvz - az * halfvy);
     halfey = (az * halfvx - ax * halfvz);
     halfez = (ax * halfvy - ay * halfvx);
 
-    // 6. »ı·ÖÎó²îÀÛ»ı£¨½öÔÚKi>0Ê±ÓĞĞ§£©
+    // 6. ç§¯åˆ†è¯¯å·®ç´¯ç§¯ï¼ˆä»…åœ¨Ki>0æ—¶æœ‰æ•ˆï¼‰
     if (Ki > 0.0f) {
         ahrs->exInt += Ki * halfex * dt;
         ahrs->eyInt += Ki * halfey * dt;
@@ -303,30 +303,30 @@ void Mahony_Update(Mahony_AHRS_t *ahrs, float ax, float ay, float az, float wx_d
         wy += ahrs->eyInt;
         wz += ahrs->ezInt;
     } else {
-        // ÎŞ»ı·ÖÊ±Çå¿Õ»ı·ÖÏî
+        // æ— ç§¯åˆ†æ—¶æ¸…ç©ºç§¯åˆ†é¡¹
         ahrs->exInt = 0.0f;
         ahrs->eyInt = 0.0f;
         ahrs->ezInt = 0.0f;
     }
 
-    // 7. ±ÈÀıÏî²¹³¥½ÇËÙ¶È
+    // 7. æ¯”ä¾‹é¡¹è¡¥å¿è§’é€Ÿåº¦
     wx += Kp * halfex;
     wy += Kp * halfey;
     wz += Kp * halfez;
 
-    // ========== RK2£¨¶ş½×Áú¸ñ-¿âËş£©ËÄÔªÊı¸üĞÂ ==========
+    // ========== RK2ï¼ˆäºŒé˜¶é¾™æ ¼-åº“å¡”ï¼‰å››å…ƒæ•°æ›´æ–° ==========
     float q0 = ahrs->q0, q1 = ahrs->q1, q2 = ahrs->q2, q3 = ahrs->q3;
     float half_wx = 0.5f * wx;
     float half_wy = 0.5f * wy;
     float half_wz = 0.5f * wz;
 
-    // µÚÒ»²½£º¼ÆËãk1£¨dt´¦µÄĞ±ÂÊ£©
+    // ç¬¬ä¸€æ­¥ï¼šè®¡ç®—k1ï¼ˆdtå¤„çš„æ–œç‡ï¼‰
     float k1_q0 = -q1 * half_wx - q2 * half_wy - q3 * half_wz;
     float k1_q1 =  q0 * half_wx + q2 * half_wz - q3 * half_wy;
     float k1_q2 =  q0 * half_wy - q1 * half_wz + q3 * half_wx;
     float k1_q3 =  q0 * half_wz + q1 * half_wy - q2 * half_wx;
 
-    // µÚ¶ş²½£º¼ÆËãÖĞµã´¦µÄËÄÔªÊıÖµ
+    // ç¬¬äºŒæ­¥ï¼šè®¡ç®—ä¸­ç‚¹å¤„çš„å››å…ƒæ•°å€¼
     float half_dt = 0.5f * dt;
     float q_mid0 = q0 + k1_q0 * half_dt;
     float q_mid1 = q1 + k1_q1 * half_dt;
@@ -340,29 +340,29 @@ void Mahony_Update(Mahony_AHRS_t *ahrs, float ax, float ay, float az, float wx_d
         return;
     }
 
-    // µÚÈı²½£º¼ÆËãk2£¨ÖĞµã´¦µÄĞ±ÂÊ£©
+    // ç¬¬ä¸‰æ­¥ï¼šè®¡ç®—k2ï¼ˆä¸­ç‚¹å¤„çš„æ–œç‡ï¼‰
     float k2_q0 = -q_mid1 * half_wx - q_mid2 * half_wy - q_mid3 * half_wz;
     float k2_q1 =  q_mid0 * half_wx + q_mid2 * half_wz - q_mid3 * half_wy;
     float k2_q2 =  q_mid0 * half_wy - q_mid1 * half_wz + q_mid3 * half_wx;
     float k2_q3 =  q_mid0 * half_wz + q_mid1 * half_wy - q_mid2 * half_wx;
 
-    // µÚËÄ²½£ºÓÃk2¸üĞÂËÄÔªÊı
+    // ç¬¬å››æ­¥ï¼šç”¨k2æ›´æ–°å››å…ƒæ•°
     ahrs->q0 = q0 + k2_q0 * dt;
     ahrs->q1 = q1 + k2_q1 * dt;
     ahrs->q2 = q2 + k2_q2 * dt;
     ahrs->q3 = q3 + k2_q3 * dt;
 
-    // µÚÎå²½£ºËÄÔªÊı¹éÒ»»¯
+    // ç¬¬äº”æ­¥ï¼šå››å…ƒæ•°å½’ä¸€åŒ–
     norm = sqrtf(ahrs->q0*ahrs->q0 + ahrs->q1*ahrs->q1 + ahrs->q2*ahrs->q2 + ahrs->q3*ahrs->q3);
     if (norm > 0.0001f) {
         ahrs->q0 /= norm; ahrs->q1 /= norm; ahrs->q2 /= norm; ahrs->q3 /= norm;
     }
-    // ========== RK2»ı·Ö½áÊø ==========
+    // ========== RK2ç§¯åˆ†ç»“æŸ ==========
 }
 
 /**************************************************************************
- * º¯ÊıÃû£ºMahony_Get_Euler_Rad
- * ¹¦ÄÜ£º´ÓËÄÔªÊı¼ÆËãÅ·À­½Ç£¨»¡¶È£©
+ * å‡½æ•°åï¼šMahony_Get_Euler_Rad
+ * åŠŸèƒ½ï¼šä»å››å…ƒæ•°è®¡ç®—æ¬§æ‹‰è§’ï¼ˆå¼§åº¦ï¼‰
  **************************************************************************/
 void Mahony_Get_Euler_Rad(Mahony_AHRS_t *ahrs, float *roll_rad, float *pitch_rad, float *yaw_rad)
 {
@@ -372,8 +372,8 @@ void Mahony_Get_Euler_Rad(Mahony_AHRS_t *ahrs, float *roll_rad, float *pitch_rad
 }
 
 /**************************************************************************
- * º¯ÊıÃû£ºMahony_Get_Euler_Deg
- * ¹¦ÄÜ£º´ÓËÄÔªÊı¼ÆËãÅ·À­½Ç£¨¶È£©
+ * å‡½æ•°åï¼šMahony_Get_Euler_Deg
+ * åŠŸèƒ½ï¼šä»å››å…ƒæ•°è®¡ç®—æ¬§æ‹‰è§’ï¼ˆåº¦ï¼‰
  **************************************************************************/
 void Mahony_Get_Euler_Deg(Mahony_AHRS_t *ahrs, float *roll_deg, float *pitch_deg, float *yaw_deg)
 {
@@ -384,7 +384,7 @@ void Mahony_Get_Euler_Deg(Mahony_AHRS_t *ahrs, float *roll_deg, float *pitch_deg
     *yaw_deg = yaw_rad * RAD2DEG;
 }
 
-// ===================== ¸¨Öúº¯Êı1£º½Ç¶È¹éÒ»»¯µ½ [-¦Ğ, ¦Ğ) =====================
+// ===================== è¾…åŠ©å‡½æ•°1ï¼šè§’åº¦å½’ä¸€åŒ–åˆ° [-Ï€, Ï€) =====================
 static float pf_wrap_angle_rad(float angle_rad) {
     while (angle_rad >= M_PI) {
         angle_rad -= 2.0f * M_PI;
@@ -395,7 +395,7 @@ static float pf_wrap_angle_rad(float angle_rad) {
     return angle_rad;
 }
 
-// ===================== ¸¨Öúº¯Êı2£º½Ç¶È¹éÒ»»¯µ½ [-180¡ã, 180¡ã) =====================
+// ===================== è¾…åŠ©å‡½æ•°2ï¼šè§’åº¦å½’ä¸€åŒ–åˆ° [-180Â°, 180Â°) =====================
 static float pf_wrap_angle_deg(float angle_deg) {
     while (angle_deg >= 180.0f) {
         angle_deg -= 360.0f;
@@ -406,19 +406,19 @@ static float pf_wrap_angle_deg(float angle_deg) {
     return angle_deg;
 }
 
-// ===================== ¸¨Öúº¯Êı3£º½Ç¶È¶È×ª»¡¶È£¨²¢¹éÒ»»¯£© =====================
+// ===================== è¾…åŠ©å‡½æ•°3ï¼šè§’åº¦åº¦è½¬å¼§åº¦ï¼ˆå¹¶å½’ä¸€åŒ–ï¼‰ =====================
 static float pf_deg_to_rad(float angle_deg) {
     float normalized_deg = pf_wrap_angle_deg(angle_deg);
     return normalized_deg * DEG2RAD;
 }
 
-// ===================== ¸¨Öúº¯Êı4£º»¡¶È½Ç¶È²î£¨¿¼ÂÇ»·ÈÆ£© =====================
+// ===================== è¾…åŠ©å‡½æ•°4ï¼šå¼§åº¦è§’åº¦å·®ï¼ˆè€ƒè™‘ç¯ç»•ï¼‰ =====================
 static float pf_angle_diff_rad(float angle1_rad, float angle2_rad) {
     float diff = angle1_rad - angle2_rad;
     return pf_wrap_angle_rad(diff);
 }
 
-// ===================== ¸¨Öúº¯Êı5£ºÉú³É¸ßË¹°×ÔëÉù£¨Box-Muller£© =====================
+// ===================== è¾…åŠ©å‡½æ•°5ï¼šç”Ÿæˆé«˜æ–¯ç™½å™ªå£°ï¼ˆBox-Mullerï¼‰ =====================
 static float pf_gaussian_rand(float std) {
     static int has_spare = 0;
     static float spare = 0.0f;
@@ -443,98 +443,98 @@ static float pf_gaussian_rand(float std) {
     return u1 * s * std;
 }
 
-// ===================== Á£×ÓÂË²¨Æ÷³õÊ¼»¯ =====================
-// ¹¦ÄÜ£º³õÊ¼»¯Á£×ÓÂË²¨Æ÷£¬Éè¶¨³õÊ¼Pitch/Roll¼°ÔëÉù²ÎÊı
-// ²ÎÊı£ºinit_pitch_deg - ³õÊ¼Pitch½Ç¶È£¨¶È£©
-//       init_roll_deg  - ³õÊ¼Roll½Ç¶È£¨¶È£©
+// ===================== ç²’å­æ»¤æ³¢å™¨åˆå§‹åŒ– =====================
+// åŠŸèƒ½ï¼šåˆå§‹åŒ–ç²’å­æ»¤æ³¢å™¨ï¼Œè®¾å®šåˆå§‹Pitch/RollåŠå™ªå£°å‚æ•°
+// å‚æ•°ï¼šinit_pitch_deg - åˆå§‹Pitchè§’åº¦ï¼ˆåº¦ï¼‰
+//       init_roll_deg  - åˆå§‹Rollè§’åº¦ï¼ˆåº¦ï¼‰
 void pf_init(ParticleFilter_t *pf, float init_pitch_deg, float init_roll_deg) {
-    // 1. ×ª»»Îª»¡¶È
+    // 1. è½¬æ¢ä¸ºå¼§åº¦
     float init_pitch_rad = pf_deg_to_rad(init_pitch_deg);
     float init_roll_rad = pf_deg_to_rad(init_roll_deg);
 
-    // 2. Éè¶¨¹ı³ÌÔëÉùºÍ²âÁ¿ÔëÉù±ê×¼²î£¨»¡¶È£©
-    // PitchÖá
-    pf->process_noise_std[AXIS_PITCH] = 0.002f;  // Ô¼0.11¶È
-    pf->measure_noise_std[AXIS_PITCH] = 0.006f;  // Ô¼0.34¶È
-    // RollÖá
-    pf->process_noise_std[AXIS_ROLL] = 0.002f;   // Ô¼0.11¶È
-    pf->measure_noise_std[AXIS_ROLL] = 0.006f;   // Ô¼0.34¶È
+    // 2. è®¾å®šè¿‡ç¨‹å™ªå£°å’Œæµ‹é‡å™ªå£°æ ‡å‡†å·®ï¼ˆå¼§åº¦ï¼‰
+    // Pitchè½´
+    pf->process_noise_std[AXIS_PITCH] = 0.002f;  // çº¦0.11åº¦
+    pf->measure_noise_std[AXIS_PITCH] = 0.006f;  // çº¦0.34åº¦
+    // Rollè½´
+    pf->process_noise_std[AXIS_ROLL] = 0.002f;   // çº¦0.11åº¦
+    pf->measure_noise_std[AXIS_ROLL] = 0.006f;   // çº¦0.34åº¦
 
-    // 3. ³õÊ¼»¯Á£×ÓÈº£¨Î§ÈÆ³õÊ¼ÖµÌí¼Ó¸ßË¹ÈÅ¶¯£©
-    float init_std = 0.035f; // Ô¼2¶È£¬³õÊ¼É¢²¼·¶Î§
+    // 3. åˆå§‹åŒ–ç²’å­ç¾¤ï¼ˆå›´ç»•åˆå§‹å€¼æ·»åŠ é«˜æ–¯æ‰°åŠ¨ï¼‰
+    float init_std = 0.035f; // çº¦2åº¦ï¼Œåˆå§‹æ•£å¸ƒèŒƒå›´
     for (int i = 0; i < PF_PARTICLE_NUM; i++) {
-        // PitchÁ£×Ó
+        // Pitchç²’å­
         float raw_pitch = init_pitch_rad + pf_gaussian_rand(init_std);
         pf->particles[i][AXIS_PITCH] = pf_wrap_angle_rad(raw_pitch);
-        // RollÁ£×Ó
+        // Rollç²’å­
         float raw_roll = init_roll_rad + pf_gaussian_rand(init_std);
         pf->particles[i][AXIS_ROLL] = pf_wrap_angle_rad(raw_roll);
     }
 
-    // 4. ËùÓĞÁ£×ÓÈ¨ÖØÏàµÈ
+    // 4. æ‰€æœ‰ç²’å­æƒé‡ç›¸ç­‰
     for (int i = 0; i < PF_PARTICLE_NUM; i++) {
         pf->weights[i] = 1.0f / PF_PARTICLE_NUM;
     }
 
-    // 5. ³õÊ¼»¯×´Ì¬¹À¼ÆÖµ
+    // 5. åˆå§‹åŒ–çŠ¶æ€ä¼°è®¡å€¼
     pf->state_est_rad[AXIS_PITCH] = init_pitch_rad;
     pf->state_est_rad[AXIS_ROLL] = init_roll_rad;
     pf->state_est_deg[AXIS_PITCH] = init_pitch_deg;
     pf->state_est_deg[AXIS_ROLL] = init_roll_deg;
 }
 
-// ===================== Á£×ÓÂË²¨Æ÷Ô¤²â²½ =====================
+// ===================== ç²’å­æ»¤æ³¢å™¨é¢„æµ‹æ­¥ =====================
 void pf_predict(ParticleFilter_t *pf) {
     for (int i = 0; i < PF_PARTICLE_NUM; i++) {
-        // Pitch¼Ó¹ı³ÌÔëÉù
+        // PitchåŠ è¿‡ç¨‹å™ªå£°
         float noise_pitch = pf_gaussian_rand(pf->process_noise_std[AXIS_PITCH]);
         float raw_pitch = pf->particles[i][AXIS_PITCH] + noise_pitch;
         pf->particles[i][AXIS_PITCH] = pf_wrap_angle_rad(raw_pitch);
-        // Roll¼Ó¹ı³ÌÔëÉù
+        // RollåŠ è¿‡ç¨‹å™ªå£°
         float noise_roll = pf_gaussian_rand(pf->process_noise_std[AXIS_ROLL]);
         float raw_roll = pf->particles[i][AXIS_ROLL] + noise_roll;
         pf->particles[i][AXIS_ROLL] = pf_wrap_angle_rad(raw_roll);
     }
 }
 
-// ===================== Á£×ÓÂË²¨Æ÷¸üĞÂ²½ =====================
-// ¹¦ÄÜ£º¸ù¾İÈÚºÏºóµÄPitch/Roll¹Û²âÖµ¸üĞÂÁ£×ÓÈ¨ÖØ
-// ²ÎÊı£ºfused_pitch_deg - ÈÚºÏºóµÄPitch½Ç¶È£¨¶È£©
-//       fused_roll_deg  - ÈÚºÏºóµÄRoll½Ç¶È£¨¶È£©
+// ===================== ç²’å­æ»¤æ³¢å™¨æ›´æ–°æ­¥ =====================
+// åŠŸèƒ½ï¼šæ ¹æ®èåˆåçš„Pitch/Rollè§‚æµ‹å€¼æ›´æ–°ç²’å­æƒé‡
+// å‚æ•°ï¼šfused_pitch_deg - èåˆåçš„Pitchè§’åº¦ï¼ˆåº¦ï¼‰
+//       fused_roll_deg  - èåˆåçš„Rollè§’åº¦ï¼ˆåº¦ï¼‰
 void pf_update(ParticleFilter_t *pf, float fused_pitch_deg, float fused_roll_deg) {
-    // 1. ¹Û²âÖµ×ªÎª»¡¶È
+    // 1. è§‚æµ‹å€¼è½¬ä¸ºå¼§åº¦
     float fused_pitch_rad = pf_deg_to_rad(fused_pitch_deg);
     float fused_roll_rad = pf_deg_to_rad(fused_roll_deg);
 
-    // 2. ¼ÆËã¹Û²âÔëÉùĞ­·½²î£¨·½²î£©
+    // 2. è®¡ç®—è§‚æµ‹å™ªå£°åæ–¹å·®ï¼ˆæ–¹å·®ï¼‰
     float R_pitch = pf->measure_noise_std[AXIS_PITCH] * pf->measure_noise_std[AXIS_PITCH];
     float R_roll = pf->measure_noise_std[AXIS_ROLL] * pf->measure_noise_std[AXIS_ROLL];
 
     float weight_sum = 0.0f;
 
-    // 3. ¼ÆËãÃ¿¸öÁ£×ÓµÄËÆÈ»²¢¸üĞÂÈ¨ÖØ
+    // 3. è®¡ç®—æ¯ä¸ªç²’å­çš„ä¼¼ç„¶å¹¶æ›´æ–°æƒé‡
     for (int i = 0; i < PF_PARTICLE_NUM; i++) {
-        // --- PitchËÆÈ» ---
+        // --- Pitchä¼¼ç„¶ ---
         float predicted_pitch = pf->particles[i][AXIS_PITCH];
         float error_pitch = pf_angle_diff_rad(fused_pitch_rad, predicted_pitch);
         float likelihood_pitch = expf(-0.5f * error_pitch * error_pitch / R_pitch);
 
-        // --- RollËÆÈ» ---
+        // --- Rollä¼¼ç„¶ ---
         float predicted_roll = pf->particles[i][AXIS_ROLL];
         float error_roll = pf_angle_diff_rad(fused_roll_rad, predicted_roll);
         float likelihood_roll = expf(-0.5f * error_roll * error_roll / R_roll);
 
-        // --- ÁªºÏËÆÈ»£¨¼ÙÉèPitchºÍRoll¶ÀÁ¢£©---
+        // --- è”åˆä¼¼ç„¶ï¼ˆå‡è®¾Pitchå’ŒRollç‹¬ç«‹ï¼‰---
         float joint_likelihood = likelihood_pitch * likelihood_roll;
 
-        // ¸üĞÂÈ¨ÖØ
+        // æ›´æ–°æƒé‡
         pf->weights[i] = pf->weights[i] * joint_likelihood;
         weight_sum += pf->weights[i];
     }
 
-    // 4. È¨ÖØ¹éÒ»»¯
+    // 4. æƒé‡å½’ä¸€åŒ–
     if (weight_sum < 1e-10f) {
-        // È¨ÖØÍË»¯ÑÏÖØ£¬ÖØÖÃÎª¾ùÔÈ·Ö²¼
+        // æƒé‡é€€åŒ–ä¸¥é‡ï¼Œé‡ç½®ä¸ºå‡åŒ€åˆ†å¸ƒ
         for (int i = 0; i < PF_PARTICLE_NUM; i++) {
             pf->weights[i] = 1.0f / PF_PARTICLE_NUM;
         }
@@ -545,7 +545,7 @@ void pf_update(ParticleFilter_t *pf, float fused_pitch_deg, float fused_roll_deg
     }
 }
 
-// ===================== ¼ÆËãÓĞĞ§Á£×ÓÊı =====================
+// ===================== è®¡ç®—æœ‰æ•ˆç²’å­æ•° =====================
 float pf_calculate_neff(ParticleFilter_t *pf) {
     float sum_sq = 0.0f;
     for (int i = 0; i < PF_PARTICLE_NUM; i++) {
@@ -554,7 +554,7 @@ float pf_calculate_neff(ParticleFilter_t *pf) {
     return 1.0f / sum_sq;
 }
 
-// ===================== ÏµÍ³ÖØ²ÉÑù£¨µÍ·½²î²ÉÑù£© =====================
+// ===================== ç³»ç»Ÿé‡é‡‡æ ·ï¼ˆä½æ–¹å·®é‡‡æ ·ï¼‰ =====================
 void pf_resample(ParticleFilter_t *pf) {
     float new_particles[PF_PARTICLE_NUM][PF_STATE_DIM];
     float new_weights[PF_PARTICLE_NUM];
@@ -570,7 +570,7 @@ void pf_resample(ParticleFilter_t *pf) {
             cumulative_sum += pf->weights[j];
         }
 
-        // ¸´ÖÆÁ£×Ó£¨²¢È·±£½Ç¶È·¶Î§£©
+        // å¤åˆ¶ç²’å­ï¼ˆå¹¶ç¡®ä¿è§’åº¦èŒƒå›´ï¼‰
         new_particles[i][AXIS_PITCH] = pf_wrap_angle_rad(pf->particles[j][AXIS_PITCH]);
         new_particles[i][AXIS_ROLL] = pf_wrap_angle_rad(pf->particles[j][AXIS_ROLL]);
         new_weights[i] = 1.0f / PF_PARTICLE_NUM;
@@ -578,7 +578,7 @@ void pf_resample(ParticleFilter_t *pf) {
         u += step;
     }
 
-    // Ìæ»»¾ÉÁ£×ÓÈº
+    // æ›¿æ¢æ—§ç²’å­ç¾¤
     for (int i = 0; i < PF_PARTICLE_NUM; i++) {
         pf->particles[i][AXIS_PITCH] = new_particles[i][AXIS_PITCH];
         pf->particles[i][AXIS_ROLL] = new_particles[i][AXIS_ROLL];
@@ -586,16 +586,16 @@ void pf_resample(ParticleFilter_t *pf) {
     }
 }
 
-// ===================== ×´Ì¬¹À¼Æ£¨¼ÓÈ¨Æ½¾ù£¬´¦ÀíÑ­»·½Ç¶È£© =====================
+// ===================== çŠ¶æ€ä¼°è®¡ï¼ˆåŠ æƒå¹³å‡ï¼Œå¤„ç†å¾ªç¯è§’åº¦ï¼‰ =====================
 void pf_estimate(ParticleFilter_t *pf) {
-    // --- Pitch·ÖÁ¿Í³¼Æ ---
+    // --- Pitchåˆ†é‡ç»Ÿè®¡ ---
     float sum_sin_pitch = 0.0f;
     float sum_cos_pitch = 0.0f;
-    // --- Roll·ÖÁ¿Í³¼Æ ---
+    // --- Rollåˆ†é‡ç»Ÿè®¡ ---
     float sum_sin_roll = 0.0f;
     float sum_cos_roll = 0.0f;
 
-    // 1. ¼ÓÈ¨ÇóºÍsin/cos
+    // 1. åŠ æƒæ±‚å’Œsin/cos
     for (int i = 0; i < PF_PARTICLE_NUM; i++) {
         float w = pf->weights[i];
 
@@ -610,45 +610,45 @@ void pf_estimate(ParticleFilter_t *pf) {
         sum_cos_roll += w * cosf(roll);
     }
 
-    // 2. ¼ÆËãÆ½¾ù½Ç¶È£¨atan2£©
+    // 2. è®¡ç®—å¹³å‡è§’åº¦ï¼ˆatan2ï¼‰
     pf->state_est_rad[AXIS_PITCH] = atan2f(sum_sin_pitch, sum_cos_pitch);
     pf->state_est_rad[AXIS_ROLL] = atan2f(sum_sin_roll, sum_cos_roll);
 
-    // 3. ×ª»»Îª¶ÈÊıÊä³ö
+    // 3. è½¬æ¢ä¸ºåº¦æ•°è¾“å‡º
     pf->state_est_deg[AXIS_PITCH] = pf->state_est_rad[AXIS_PITCH] * RAD2DEG;
     pf->state_est_deg[AXIS_ROLL] = pf->state_est_rad[AXIS_ROLL] * RAD2DEG;
 }
 
-// ===================== ÍÓÂİÒÇ±ê¶¨£º±ÈÀı+·ÇÕı½»ĞÔĞ£Õı =====================
+// ===================== é™€èºä»ªæ ‡å®šï¼šæ¯”ä¾‹+éæ­£äº¤æ€§æ ¡æ­£ =====================
 /**
- * @brief  Ó¦ÓÃÍÓÂİÒÇµÄ±ÈÀıÏµÊıºÍ·ÇÕı½»ĞÔĞ£Õı¾ØÕó£¨½áºÏSCDataÁãÆ«£©
- * @param  calib: ±ê¶¨²ÎÊı½á¹¹Ìå£¨°üº¬3x3¾ØÕóK£©
- * @param  raw_gx, raw_gy, raw_gz: Ô­Ê¼ÍÓÂİÒÇÊı¾İ£¨deg/s£©
- * @param  out_gx, out_gy, out_gz: Ğ£ÕıºóµÄ½ÇËÙ¶È£¨deg/s£©
- * @note   ¸Ãº¯ÊıÓ¦ÔÚÁãÆ«²¹³¥Ö®ºóµ÷ÓÃ£¬»òÖ±½ÓÓÃÓÚÔ­Ê¼Êı¾İ
+ * @brief  åº”ç”¨é™€èºä»ªçš„æ¯”ä¾‹ç³»æ•°å’Œéæ­£äº¤æ€§æ ¡æ­£çŸ©é˜µï¼ˆç»“åˆSCDataé›¶åï¼‰
+ * @param  calib: æ ‡å®šå‚æ•°ç»“æ„ä½“ï¼ˆåŒ…å«3x3çŸ©é˜µKï¼‰
+ * @param  raw_gx, raw_gy, raw_gz: åŸå§‹é™€èºä»ªæ•°æ®ï¼ˆdeg/sï¼‰
+ * @param  out_gx, out_gy, out_gz: æ ¡æ­£åçš„è§’é€Ÿåº¦ï¼ˆdeg/sï¼‰
+ * @note   è¯¥å‡½æ•°åº”åœ¨é›¶åè¡¥å¿ä¹‹åè°ƒç”¨ï¼Œæˆ–ç›´æ¥ç”¨äºåŸå§‹æ•°æ®
  */
 void Gyro_Apply_Scale_Nonortho(Gyro_Calib_t *calib,
                                  float raw_gx, float raw_gy, float raw_gz,
                                  float *out_gx, float *out_gy, float *out_gz)
 {
-    // 3x3¾ØÕó³Ë·¨£ºĞ£Õıºó = K * Ô­Ê¼ÏòÁ¿
+    // 3x3çŸ©é˜µä¹˜æ³•ï¼šæ ¡æ­£å = K * åŸå§‹å‘é‡
     *out_gx = calib->K[0][0] * raw_gx + calib->K[0][1] * raw_gy + calib->K[0][2] * raw_gz;
     *out_gy = calib->K[1][0] * raw_gx + calib->K[1][1] * raw_gy + calib->K[1][2] * raw_gz;
     *out_gz = calib->K[2][0] * raw_gx + calib->K[2][1] * raw_gy + calib->K[2][2] * raw_gz;
 }
 
-// ===================== ³õÊ¼»¯±ê¶¨¾ØÕó£¨Ê¾ÀıÊı¾İ£¬Ğè¸ù¾İÊµ¼Ê´«¸ĞÆ÷µ÷Õû£© =====================
+// ===================== åˆå§‹åŒ–æ ‡å®šçŸ©é˜µï¼ˆç¤ºä¾‹æ•°æ®ï¼Œéœ€æ ¹æ®å®é™…ä¼ æ„Ÿå™¨è°ƒæ•´ï¼‰ =====================
 void Gyro_Calib_Init(Gyro_Calib_t *calib)
 {
-    // ´Ë´¦¾ØÕóÎªÊ¾ÀıÖµ£¨°üº¬±ÈÀıÒò×ÓºÍ·ÇÕı½»Ğ£Õı£©£¬Êµ¼ÊĞèÍ¨¹ı±ê¶¨ÊµÑé»ñµÃ
-    // ¶Ô½ÇÏßÎª±ÈÀıÒò×Ó£¬·Ç¶Ô½ÇÏßÎªÖá¼äñîºÏÏµÊı
-    calib->K[0][0] = 3.679275f;  // XÖá±ÈÀıÒò×Ó
-    calib->K[0][1] = 0.009030f;  // XÖá¶ÔYÖáñîºÏ
-    calib->K[0][2] = 0.016253f;  // XÖá¶ÔZÖáñîºÏ
-    calib->K[1][0] = -0.012518f; // YÖá¶ÔXÖáñîºÏ
-    calib->K[1][1] = 4.269273f;  // YÖá±ÈÀıÒò×Ó
-    calib->K[1][2] = 0.010439f;  // YÖá¶ÔZÖáñîºÏ
-    calib->K[2][0] = -0.016767f; // ZÖá¶ÔXÖáñîºÏ
-    calib->K[2][1] = 0.010197f;  // ZÖá¶ÔYÖáñîºÏ
-    calib->K[2][2] = 4.338457f;  // ZÖá±ÈÀıÒò×Ó
+    // æ­¤å¤„çŸ©é˜µä¸ºç¤ºä¾‹å€¼ï¼ˆåŒ…å«æ¯”ä¾‹å› å­å’Œéæ­£äº¤æ ¡æ­£ï¼‰ï¼Œå®é™…éœ€é€šè¿‡æ ‡å®šå®éªŒè·å¾—
+    // å¯¹è§’çº¿ä¸ºæ¯”ä¾‹å› å­ï¼Œéå¯¹è§’çº¿ä¸ºè½´é—´è€¦åˆç³»æ•°
+    calib->K[0][0] = 3.679275f;  // Xè½´æ¯”ä¾‹å› å­
+    calib->K[0][1] = 0.009030f;  // Xè½´å¯¹Yè½´è€¦åˆ
+    calib->K[0][2] = 0.016253f;  // Xè½´å¯¹Zè½´è€¦åˆ
+    calib->K[1][0] = -0.012518f; // Yè½´å¯¹Xè½´è€¦åˆ
+    calib->K[1][1] = 4.269273f;  // Yè½´æ¯”ä¾‹å› å­
+    calib->K[1][2] = 0.010439f;  // Yè½´å¯¹Zè½´è€¦åˆ
+    calib->K[2][0] = -0.016767f; // Zè½´å¯¹Xè½´è€¦åˆ
+    calib->K[2][1] = 0.010197f;  // Zè½´å¯¹Yè½´è€¦åˆ
+    calib->K[2][2] = 4.338457f;  // Zè½´æ¯”ä¾‹å› å­
 }
