@@ -225,3 +225,218 @@ cmake --build --target M3508test --preset Debug
 **IMU 安装偏移**（上电自动完成）：上电后静置 2 秒，固件自动采集加速度计均值计算安装偏移并存入 `euler_offset[]`，无需手动操作。
 
 **视觉坐标系偏移**（需手动标定）：让云台静止在编码器零点，视觉对准正前方装甲板，在 Ozone 里读取此时 `dbg_vis_yaw` 和 `dbg_vis_pitch` 的值，分别填入 `app_sentry_globals.c` 中的 `vis_yaw_offset` 和 `vis_pitch_offset`。
+
+![image-20260423154405459](C:\Users\Ahola\AppData\Roaming\Typora\typora-user-images\image-20260423154405459.png)
+
+![image-20260423154414947](C:\Users\Ahola\AppData\Roaming\Typora\typora-user-images\image-20260423154414947.png)
+
+![image-20260423154420871](C:\Users\Ahola\AppData\Roaming\Typora\typora-user-images\image-20260423154420871.png)
+
+### 分层设计
+
+整个工程分为四层，职责严格分离：
+
+```
+App   ──  FreeRTOS 任务，业务逻辑
+Bsp   ──  板级驱动，直接操作硬件
+Module──  传感器中间件，寄存器/SPI封装
+Lib   ──  纯算法，无硬件依赖
+```
+
+### App 层
+
+#### 共享全局变量（`app_sentry_globals`）
+
+三个任务之间没有直接调用，全部通过共享变量通信。定义在 `app_sentry_globals.c`，声明在 `app_sentry_globals.h`，任何任务 include 头文件即可读写：
+
+c
+
+```c
+// 任务间共享的 IMU 输出
+imu_shared_t g_imu = {0};   // IMUTask 写，SentryTask 读
+
+// 电机状态
+ctrl_state_t state2 = STATE_HOMING;   // Yaw 轴状态
+ctrl_state_t state4 = STATE_HOMING;   // Pitch 轴状态
+
+// 视觉坐标（AutoAimTask 刷新，SentryTask 消费）
+volatile float vis_yaw_filtered   = 0.0f;
+volatile float vis_pitch_filtered = 0.0f;
+```
+
+#### IMUTask
+
+100 Hz，`osPriorityHigh`。上电前 2 秒做 Welford 在线方差校准，校准完成后每帧走完整信号链：
+
+```c
+void StartIMUTask(void *argument)
+{
+    float q[4] = {1.0f, 0.0f, 0.0f, 0.0f};  // Mahony 四元数
+
+    for (;;) {
+        osDelay(10);  // 100 Hz
+
+        fp32 gyro[3], accel[3], temp;
+        BMI088_read(gyro, accel, &temp);
+
+        if (!imu_calib_done) {
+            // Welford 在线方差 → 计算 AKF R0 和陀螺零偏
+            // 校准完成后 imu_calib_done = 1
+            continue;
+        }
+
+        // AKF 滤波（gz 直通，避免动态压缩）
+        float gx = Gyro_AKF_Update(&akf_gx, gyro[0]) - gyro_bias[0];
+        float gy = Gyro_AKF_Update(&akf_gy, gyro[1]) - gyro_bias[1];
+        float gz = gyro[2] - gyro_bias[2];
+
+        // ZUPT：静止时 PI 估计 gz 残余零偏
+        gz -= yaw_drift_bias;
+
+        // Mahony 姿态融合
+        MahonyAHRSupdateIMU(q, gx, gy, gz, ax, ay, az);
+
+        // 四元数 → 欧拉角 → 轴互换 → 减安装偏移
+        // ...
+
+        // 粒子滤波精化 Pitch/Roll
+        pf_predict(&pf);
+        pf_update(&pf, pitch_m, roll_m);
+        pf_estimate(&pf);
+
+        // 写入共享结构体供 SentryTask 读取
+        g_imu.pitch_m = pitch_m;
+        g_imu.yaw_m   = yaw_m;
+    }
+}
+```
+
+#### AutoAimTask
+
+1 ms 轮询，`osPriorityNormal`。只做一件事——接收并解析视觉帧：
+
+```c
+void StartAutoAimTask(void *argument)
+{
+    for (;;) {
+        BSP_USB_Receive();  // 解析后写入 g_vision_rx
+
+        // 挂 Ozone 观测
+        dbg_vis_detected = g_vision_rx.detected;
+        dbg_vis_yaw      = g_vision_rx.yaw_rad;
+        dbg_vis_pitch    = g_vision_rx.pitch_rad;
+
+        osDelay(1);
+    }
+}
+```
+
+#### SentryTask
+
+100 Hz，`osPriorityLow`。启动前阻塞等待 IMU 校准完成，然后依次执行：读编码器 → 状态机 → PID → CAN 发送 → USB 上报：
+
+```c
+void StartSentryTask(void *argument)
+{
+    // 等 IMU 校准完成才启动电机
+    while (!imu_calib_done) osDelay(10);
+
+    for (;;) {
+        osDelay(10);
+
+        // 1. 读编码器
+        dbg_angle2 = enc_to_angle(motor_info[MOTOR2_IDX].rotor_angle, zero_enc2);
+        dbg_angle4 = enc_to_angle(motor_info[MOTOR4_IDX].rotor_angle, zero_enc4);
+
+        // 2. 状态机（见下方）
+
+        // 3. 级联 PID
+        // 角度环输出 → 速度目标
+        // 速度环输出 → 电机电压
+        dbg_voltage2 = speed_pid2.p_out + speed_pid2.i_out + speed_pid2.d_out;
+
+        // 4. CAN 发送
+        set_motor_voltage(0, 0, (int16_t)dbg_voltage2, 0, (int16_t)dbg_voltage4);
+
+        // 5. USB 上报当前姿态给视觉 PC
+        BSP_USB_Send(g_imu.pitch_m, dbg_yaw_enc, tx_mode);
+    }
+}
+```
+
+### 状态机细节
+
+四个状态，切换优先级从高到低：
+
+```c
+typedef enum {
+    STATE_HOMING = 0,   // 上电归零
+    STATE_SCAN,         // 正弦扫描
+    STATE_RETURNING,    // 丢目标回零
+    STATE_TRACK         // 自瞄跟随
+} ctrl_state_t;
+```
+
+**视觉活性检测**：用 `vis_rx_ok` 计数器判断本周期是否有新帧，而不是直接读 `detected` 字段。这样视觉断连时会触发丢目标超时，而不是因为 `detected` 保持上一帧值 1 而误认为仍在追踪：
+
+```c
+static uint32_t last_vis_rx_ok = 0;
+uint8_t vision_active = 0;
+if (vis_rx_ok != last_vis_rx_ok) {
+    vision_active  = g_vision_rx.detected;
+    last_vis_rx_ok = vis_rx_ok;
+}
+// vis_rx_ok 没变 → 本周期无新帧 → vision_active = 0
+```
+
+**切入自瞄时初始化低通滤波器**，防止目标角度跳变导致电机猛冲：
+
+```c
+if (track_confirm_cnt >= TRACK_CONFIRM_FRAMES) {
+    vis_yaw_filtered   = dbg_angle2;  // 从当前编码器位置出发
+    vis_pitch_filtered = dbg_angle4;
+    angle_pid2.i_out = 0.0f;          // 清积分
+    speed_pid2.i_out = 0.0f;
+    state2 = STATE_TRACK;
+}
+```
+
+**回零保护锁**：`returning_lock = 1` 期间即使视觉重新检测到目标也不切入自瞄，避免回零途中反复抖动：
+
+```c
+if (lost_timer_ms >= LOST_TIMEOUT_MS) {
+    returning_lock = 1;        // 加锁
+    homing_target2 = dbg_angle2;  // 从当前位置出发
+    state2 = STATE_RETURNING;
+}
+// 两轴到位后
+returning_lock = 0;            // 解锁
+state2 = STATE_SCAN;
+```
+
+// 估计重力方向（从四元数推算）
+halfvx = q[1]*q[3] - q[0]*q[2];
+halfvy = q[0]*q[1] + q[2]*q[3];
+halfvz = q[0]*q[0] - 0.5f + q[3]*q[3];
+
+// 叉乘误差：测量重力 × 估计重力
+halfex = ay*halfvz - az*halfvy;
+halfey = az*halfvx - ax*halfvz;
+halfez = ax*halfvy - ay*halfvx;
+
+// 比例 + 积分反馈修正陀螺
+gx += twoKp*halfex + integralFBx;
+gy += twoKp*halfey + integralFBy;
+gz += twoKp*halfez + integralFBz;
+
+// 积分四元数
+q[0] += (-q[1]*gx - q[2]*gy - q[3]*gz) * (0.5f/sampleFreq);
+// ...归一化
+
+
+
+**为什么 gz 不过 AKF？** AKF 会在静止时把 gz 压向零偏均值，动态时滞后明显。Yaw 漂移用 ZUPT（静止零速修正）PI 估计器实时补偿，效果更好。
+
+**为什么用 vis_rx_ok 而不是 detected？** 视觉只在检测到目标时才发帧，`detected` 字段不会自动清零。用帧计数器做活性检测，帧率低时（30 Hz）只有 1/3 的控制周期收到帧，不会被误判为丢失。
+
+**为什么 SentryTask 优先级设最低？** 控制任务 100 Hz 足够，让 IMUTask 和 AutoAimTask 不被抢占，保证数据新鲜度。
