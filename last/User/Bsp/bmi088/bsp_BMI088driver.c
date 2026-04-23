@@ -1,7 +1,7 @@
 #include "bsp_BMI088driver.h"
 #include "bsp_BMI088driver.h"
-#include "module_BMI088Middleware.h"
-#include "module_BMI088reg.h"
+#include "bmi088/module_BMI088Middleware.h"
+#include "bmi088/module_BMI088reg.h"
 
 fp32 BMI088_ACCEL_SEN = BMI088_ACCEL_3G_SEN;
 fp32 BMI088_GYRO_SEN = BMI088_GYRO_2000_SEN;

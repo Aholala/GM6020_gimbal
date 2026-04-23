@@ -33,19 +33,19 @@ enable_language(C ASM)
 
 # Create an executable object type
 add_executable(${CMAKE_PROJECT_NAME}
-        User/Bsp/bsp_can.c
-        User/Bsp/bsp_can.h
-        User/Bsp/bsp_usb.c
-        User/Bsp/bsp_usb.h
-        User/Bsp/bsp_BMI088driver.c
-        User/Bsp/bsp_BMI088driver.h
+        User/Bsp/can/bsp_can.c
+        User/Bsp/can/bsp_can.h
+        User/Bsp/usb/bsp_usb.c
+        User/Bsp/usb/bsp_usb.h
+        User/Bsp/bmi088/bsp_BMI088driver.c
+        User/Bsp/bmi088/bsp_BMI088driver.h
         User/Bsp/struct_typedef.h
 
-        User/Module/module_pid.c
-        User/Module/module_pid.h
-        User/Module/module_BMI088reg.h
-        User/Module/module_BMI088Middleware.c
-        User/Module/module_BMI088Middleware.h
+        User/Module/pid/module_pid.c
+        User/Module/pid/module_pid.h
+        User/Module/bmi088/module_BMI088reg.h
+        User/Module/bmi088/module_BMI088Middleware.c
+        User/Module/bmi088/module_BMI088Middleware.h
 
         User/Lib/lib_MahonyAHRS.h
         User/Lib/lib_MahonyAHRS.c
@@ -57,12 +57,12 @@ add_executable(${CMAKE_PROJECT_NAME}
         User/App/app_sentry_common.h
         User/App/app_sentry_globals.c
         User/App/app_sentry_globals.h
-        User/App/app_imu_task.c
-        User/App/app_imu_task.h
-        User/App/app_autoaim_task.c
-        User/App/app_autoaim_task.h
-        User/App/app_sentry_task.c
-        User/App/app_sentry_task.h
+        User/App/imu_task/app_imu_task.c
+        User/App/imu_task/app_imu_task.h
+        User/App/autoaim_task/app_autoaim_task.c
+        User/App/autoaim_task/app_autoaim_task.h
+        User/App/sentry_task/app_sentry_task.c
+        User/App/sentry_task/app_sentry_task.h
 )
 
 # Add STM32CubeMX generated sources
