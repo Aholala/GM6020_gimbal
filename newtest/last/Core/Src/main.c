@@ -93,28 +93,59 @@ extern moto_info_t motor_info[MOTOR_MAX_NUM];
 #define PF_NEFF_THRESH  (PF_PARTICLE_NUM / 2.0f)
 
 /* ===== 正弦扫描参数 ================================================= */
-#define SCAN_AMP       40.0f
-#define SCAN_FREQ       0.5f
-#define SPEED_FF_GAIN   0.0f
+/* Yaw 轴（ID2）扫描参数 */
+volatile float SCAN_AMP  = 60.0f;   /* yaw 扫描幅值（°），测试时改为 5 或 20 */
+volatile float SCAN_FREQ =  0.3f;   /* yaw 扫描频率（Hz），T=1s→1.0, T=2s→0.5 */
+
+/* Pitch 轴（ID4）扫描参数（独立，比 yaw 快）*/
+volatile float  SCAN_AMP_PITCH  = 40.0f ;  /* pitch 扫描幅值 ±40° */
+volatile float  SCAN_FREQ_PITCH = 1.0f  ; /* pitch 扫描频率 Hz，约为 yaw 的 3 倍 */
+
+/* ===== 速度前馈增益 =================================================
+ *  SPEED_FF_GAIN     前馈系数（0~1.2），从 1.0 开始调
+ *
+ *  SPEED_FF_VOLTAGE  前馈电压换算系数（电压单位 / (°/s)）
+ *                    前馈直接叠加到最终电压输出，绕过速度环 KP 放大，
+ *                    避免速度环对前馈信号二次放大导致振荡。
+ *                    初始值与 SPEED_KP 相同；Ozone 里实时微调：
+ *                      偏小 → 误差峰值仍大  偏大 → 超调/电压饱和
+ * ================================================================== */
+#define SPEED_FF_GAIN      1.0f
+#define SPEED_FF_VOLTAGE  40.0f   /* 速度前馈电压系数，初始值 = SPEED_KP */
+#define ACCEL_FF_VOLTAGE   0.0f   /* 加速度前馈暂时关闭 */
 #define HOMING_SPEED   10.0f   /* 上电归零速度（°/s）*/
 #define RETURN_SPEED   60.0f   /* 丢目标回零虚拟目标步进速度（°/s），需 ≥ 电机最大跟踪速度 */
 #define RETURN_ANGLE_OUT_MAX  80.0f  /* 回零时位置环输出限幅（°/s），防止全速冲向零点甩过 */
 #define HOMING_THRESH   3.0f
 
 /* ===== PID 参数 ===================================================== */
-#define ANGLE_KP        6.0f
-#define ANGLE_KI        0.5f
-#define ANGLE_KD        0.0f
+/* Yaw 轴（ID2）位置环 */
+#define ANGLE_KP_YAW    10.0f
+#define ANGLE_KI_YAW    0.0f
+#define ANGLE_KD_YAW    0.0f
+
+/* Pitch 轴（ID4）位置环 */
+#define ANGLE_KP_PITCH  8.0f
+#define ANGLE_KI_PITCH  0.1f
+#define ANGLE_KD_PITCH  0.0f
+
 #define ANGLE_I_MAX    40.0f
-#define ANGLE_OUT_MAX 250.0f
+#define ANGLE_OUT_MAX 300.0f
 
-#define SPEED_KP      100.0f
-#define SPEED_KI        0.05f
-#define SPEED_KD        0.0f
+/* Yaw 轴（ID2）速度环 —— 需要更大 KP 克服 ±50° 附近的机械阻力 */
+#define SPEED_KP_YAW   70.0f   /* 从 50 开始往上调，直到 ±50° 不再卡顿 */
+#define SPEED_KI_YAW    0.01f
+#define SPEED_KD_YAW    0.0f
+
+/* Pitch 轴（ID4）速度环 —— 已经丝滑，保持不动 */
+#define SPEED_KP_PITCH  100.0f
+#define SPEED_KI_PITCH  0.01f
+#define SPEED_KD_PITCH  0.0f
+
 #define SPEED_I_MAX  4000.0f
-#define SPEED_OUT_MAX 15000.0f//25000
+#define SPEED_OUT_MAX 15000.0f
 
-#define LPF_ALPHA  0.5f
+#define LPF_ALPHA  0.05f        /* 加强速度平滑，减小量化噪声对速度环的影响 */
 
 /* ===== 自瞄 / 哨兵模式切换参数 ===================================== */
 /*
@@ -124,12 +155,19 @@ extern moto_info_t motor_info[MOTOR_MAX_NUM];
  *  RETURN_THRESH      回零判定阈值（°），两轴均满足才切扫描
  *  TRACK_CONFIRM_FRAMES  连续检测到目标的帧数门限，达到后才切入自瞄
  *                        防止 detected 单帧抖动误触发状态切换
+ *  VIS_WARMUP_FRAMES  上电后丢弃的视觉帧数（每帧10ms）
+ *                     STM32 开始发送上报帧后视觉会立刻回复，
+ *                     此时 IMU 校准可能尚未完成，缓冲区积压的帧
+ *                     在校准结束瞬间被处理，导致误切自瞄炸机。
+ *                     丢弃前 N 帧（默认50帧=500ms）保证连接稳定后
+ *                     再信任视觉数据。
  */
 #define TRACK_LIMIT_YAW    60.0f
 #define TRACK_LIMIT_PITCH  40.0f
 #define LOST_TIMEOUT_MS    500
 #define RETURN_THRESH       3.0f
-#define TRACK_CONFIRM_FRAMES  1   /* 连续 5 帧（50ms）确认后才切入自瞄 */
+#define TRACK_CONFIRM_FRAMES  5    /* 连续 5 帧（50ms）确认后才切入自瞄 */
+#define VIS_WARMUP_FRAMES    50    /* 上电后丢弃前 50 帧（500ms），等连接稳定 */
 
 /* ===== 视觉目标角度低通滤波参数 =====================================
  *  VIS_LPF_ALPHA  一阶低通系数（0~1），越小越平滑响应越慢
@@ -167,8 +205,14 @@ typedef enum {
 ctrl_state_t state2 = STATE_HOMING;
 ctrl_state_t state4 = STATE_HOMING;
 
-float prof_pos   = 0.0f;
-float scan_phase = 0.0f;
+/* Yaw 轴（ID2）扫描轨迹 */
+float prof_pos       = 0.0f;
+float scan_phase     = 0.0f;
+
+/* Pitch 轴（ID4）独立扫描轨迹 */
+float prof_pos_pitch   = 0.0f;
+float scan_phase_pitch = 0.0f;
+
 float dbg_spd_ff = 0.0f;
 
 /* 归零阶段各轴独立虚拟目标（°）
@@ -210,7 +254,8 @@ uint32_t lost_timer_ms = 0;
  *
  *  电机相关：
  *    dbg_angle2 / dbg_angle4      当前角度（°）
- *    dbg_prof                     扫描阶段共用虚拟目标（STATE_SCAN）
+ *    dbg_prof                     yaw 扫描阶段虚拟目标（STATE_SCAN）
+ *    dbg_prof_pitch               pitch 扫描阶段虚拟目标（STATE_SCAN）
  *                                 归零阶段请分别观测 homing_target2/4
  *    dbg_err2 / dbg_err4          跟踪误差
  *    dbg_voltage2 / dbg_voltage4  输出电压
@@ -249,10 +294,14 @@ uint32_t lost_timer_ms = 0;
  *    vis_rx_badchk                校验错误次数（正常应为 0）
  *    vis_rx_lastlen               最近一次收到的原始长度（应为 11）
  *
+ *  上电暖机诊断：
+ *    dbg_vis_warmup_cnt           已丢弃的视觉帧数（< VIS_WARMUP_FRAMES 时处于暖机期）
+ *
  * ================================================================== */
 volatile float   dbg_angle2       = 0.0f;
 volatile float   dbg_angle4       = 0.0f;
 volatile float   dbg_prof         = 0.0f;
+volatile float   dbg_prof_pitch   = 0.0f;  /* pitch 独立扫描目标，供 Ozone 观测 */
 volatile float   dbg_err2         = 0.0f;
 volatile float   dbg_err4         = 0.0f;
 volatile float   dbg_voltage2     = 0.0f;
@@ -288,6 +337,41 @@ volatile float   dbg_r0_gz        = 0.0f;
 volatile uint8_t dbg_vis_detected = 0;      /* 是否检测到目标（0/1）*/
 volatile float   dbg_vis_yaw      = 0.0f;   /* 视觉下发 yaw（单位与视觉协议一致）*/
 volatile float   dbg_vis_pitch    = 0.0f;   /* 视觉下发 pitch（单位与视觉协议一致）*/
+
+/* 上电暖机诊断（供 Ozone 观测，< VIS_WARMUP_FRAMES 时处于丢弃期）*/
+volatile uint32_t dbg_vis_warmup_cnt = 0;
+
+/* ===== 阶跃响应测试模块 =====================================================
+ *
+ *  使用方法（Ozone）：
+ *    1. 上电归位完成后（dbg_state=1，STATE_SCAN）再操作
+ *    2. 将 step_test_en 置 1，激活阶跃测试模式（扫描正弦波停止）
+ *    3. 修改 step_target_yaw（°）或 step_target_pitch（°）为目标幅值
+ *    4. 将 step_trigger 置 1 → 触发一次阶跃，PID 积分自动清零，
+ *       dbg_step_t0_ms 记录触发时刻
+ *    5. 在 Ozone Data Sampling 中观测：
+ *         dbg_angle2      yaw  实际角度（°）
+ *         dbg_angle4      pitch 实际角度（°）
+ *         dbg_step_ref2   yaw  阶跃目标（°），用于和 dbg_angle2 对比
+ *         dbg_step_ref4   pitch 阶跃目标（°），用于和 dbg_angle4 对比
+ *         dbg_err2/4      跟踪误差
+ *         dbg_step_t0_ms  触发时刻（ms），用于计算上升/调节时间
+ *    6. 阶跃完成后可再次修改 step_target_* 并置 step_trigger=1 做下一次
+ *    7. 将 step_test_en 置 0 退出测试，自动恢复扫描
+ *
+ *  注意：
+ *    - step_test_en=1 期间视觉切入自瞄正常有效，若不希望切入请断开视觉
+ *    - 阶跃幅值受 TRACK_LIMIT_YAW / TRACK_LIMIT_PITCH 硬限幅
+ *    - step_trigger 由固件自动清零（单次触发），无需手动复位
+ * ========================================================================= */
+volatile uint8_t  step_test_en      = 0;     /* 1=阶跃测试模式，0=正常扫描 */
+volatile float    step_target_yaw   = 5.0f;  /* yaw  阶跃目标幅值（°），Ozone 修改 */
+volatile float    step_target_pitch = 0.0f;  /* pitch 阶跃目标幅值（°），Ozone 修改 */
+volatile uint8_t  step_trigger      = 0;     /* 0→1 边沿触发一次阶跃，固件自动清零 */
+volatile float    dbg_step_ref2     = 0.0f;  /* 当前 yaw  阶跃目标（Ozone 参考曲线）*/
+volatile float    dbg_step_ref4     = 0.0f;  /* 当前 pitch 阶跃目标（Ozone 参考曲线）*/
+volatile uint32_t dbg_step_t0_ms    = 0;     /* 阶跃触发时刻（HAL_GetTick，ms）*/
+static   uint8_t  step_trigger_last = 0;     /* 用于边沿检测 */
 
 /* 视觉接收诊断（定义在 bsp_usb.c，此处 extern 供 Ozone 观测）*/
 extern volatile uint32_t vis_rx_total;    /* 收到的总帧次 */
@@ -387,10 +471,10 @@ int main(void)
 
   can_user_init(&hcan2);
 
-  pid_init(&angle_pid2, ANGLE_KP, ANGLE_KI, ANGLE_KD, ANGLE_I_MAX, ANGLE_OUT_MAX);
-  pid_init(&speed_pid2, SPEED_KP, SPEED_KI, SPEED_KD, SPEED_I_MAX, SPEED_OUT_MAX);
-  pid_init(&angle_pid4, ANGLE_KP, ANGLE_KI, ANGLE_KD, ANGLE_I_MAX, ANGLE_OUT_MAX);
-  pid_init(&speed_pid4, SPEED_KP, SPEED_KI, SPEED_KD, SPEED_I_MAX, SPEED_OUT_MAX);
+  pid_init(&angle_pid2, ANGLE_KP_YAW,   ANGLE_KI_YAW,   ANGLE_KD_YAW,   ANGLE_I_MAX, ANGLE_OUT_MAX);
+  pid_init(&speed_pid2, SPEED_KP_YAW,   SPEED_KI_YAW,   SPEED_KD_YAW,   SPEED_I_MAX, SPEED_OUT_MAX);
+  pid_init(&angle_pid4, ANGLE_KP_PITCH, ANGLE_KI_PITCH, ANGLE_KD_PITCH, ANGLE_I_MAX, ANGLE_OUT_MAX);
+  pid_init(&speed_pid4, SPEED_KP_PITCH, SPEED_KI_PITCH, SPEED_KD_PITCH, SPEED_I_MAX, SPEED_OUT_MAX);
 
   /* BMI088 初始化 */
   dbg_imu_error = BMI088_init();
@@ -402,6 +486,7 @@ int main(void)
   zero_enc2     = motor_info[MOTOR2_IDX].rotor_angle;
   zero_enc4     = motor_info[MOTOR4_IDX].rotor_angle;
   prof_pos      = 0.0f;
+  prof_pos_pitch = 0.0f;
   /* 归零虚拟目标初始化为上电时的编码器角度（以零点为参考即 0°），
      上电后若电机已在零点附近则直接满足归零条件，不会产生初始突变 */
   homing_target2 = 0.0f;
@@ -437,7 +522,7 @@ int main(void)
     static uint32_t last_tick = 0;
     if (HAL_GetTick() - last_tick >= 10)   /* 10ms = 100Hz，与 MahonyAHRS.c sampleFreq 一致 */
     {
-      last_tick = HAL_GetTick();
+      last_tick += 10;   /* 固定步进，保证累积精确，避免执行耗时导致周期抖动 */
 
       const float dt = 0.01f;
 
@@ -573,7 +658,8 @@ int main(void)
           /* IMU 校准结束时重新记录电机零点，使电机零点与 IMU 姿态零点对齐 */
           zero_enc2 = motor_info[MOTOR2_IDX].rotor_angle;
           zero_enc4 = motor_info[MOTOR4_IDX].rotor_angle;
-          prof_pos  = 0.0f;
+          prof_pos       = 0.0f;
+          prof_pos_pitch = 0.0f;
           /* pf_initialized 仍为 0，下一帧正常运行时再初始化 PF */
         }
 
@@ -751,7 +837,7 @@ int main(void)
        * 4a. 主状态机
        *
        *   STATE_HOMING    → 上电归零（prof_pos 缓慢移向 0°）
-       *   STATE_SCAN      → 哨兵扫描（正弦轨迹）
+       *   STATE_SCAN      → 哨兵扫描（yaw/pitch 独立正弦轨迹）
        *   STATE_RETURNING → 自瞄丢目标后回零，到位后切扫描
        *   STATE_TRACK     → 自瞄跟随（视觉绝对角度 + 限位保护）
        *
@@ -811,6 +897,13 @@ int main(void)
 
       /* ---- 4a-3. 收到视觉数据 → 更新目标角度并切/保持自瞄 ----
        *
+       *  上电暖机保护：上电后前 VIS_WARMUP_FRAMES 帧视觉数据强制丢弃，
+       *    不进行自瞄切入判断。原因：STM32 开始向视觉上报状态帧后，
+       *    视觉端会立刻回复目标角度帧，此时 IMU 校准可能刚结束，
+       *    USB 缓冲区中积压的帧在校准结束瞬间被处理，若不丢弃会
+       *    误切自瞄导致电机炸机。
+       *    dbg_vis_warmup_cnt 供 Ozone 观测，< VIS_WARMUP_FRAMES 时为暖机期。
+       *
        *  切入逻辑：vision_active=1（本周期有新帧且detected=1）连续
        *            TRACK_CONFIRM_FRAMES 帧后切入 STATE_TRACK，
        *            防止 detected 单帧抖动误触发。
@@ -820,36 +913,48 @@ int main(void)
        *    - detected=0 时目标保持上一帧位置不动，同时开始丢目标计时
        *    - 超过 LOST_TIMEOUT_MS 后切 STATE_RETURNING，平滑回零后恢复扫描
        * --------------------------------------------------------- */
-      static int track_confirm_cnt = 0;  /* 连续检测到目标的帧数 */
+      static int      track_confirm_cnt  = 0;   /* 连续检测到目标的帧数 */
+      static uint32_t vis_warmup_cnt     = 0;   /* 上电后收到的有效视觉帧计数（暖机用）*/
 
       /* 低通滤波器状态已提升为全局变量（vis_yaw_filtered / vis_pitch_filtered），
        * 切入 STATE_TRACK 时可直接初始化，供 Ozone 实时观测 */
 
-      /* ---- 切入逻辑：vision_active 确认帧计数 ---- */
+      /* ---- 切入逻辑：vision_active 确认帧计数（含上电暖机保护）---- */
       if (homing_done && vision_active && !returning_lock)
       {
-        track_confirm_cnt++;
-        if (state2 != STATE_TRACK && track_confirm_cnt >= TRACK_CONFIRM_FRAMES)
+        if (vis_warmup_cnt < VIS_WARMUP_FRAMES)
         {
-          /* 连续 TRACK_CONFIRM_FRAMES 帧确认，切入自瞄
-           * 用当前编码器位置初始化低通滤波器，切入瞬间目标=当前位置，
-           * 低通以 VIS_LPF_ALPHA 速率平滑收敛到视觉角度，
-           * 避免目标跳变导致电机猛冲把装甲板甩出视野
-           * 同时清前馈和 PID 积分 */
-          vis_yaw_filtered   = dbg_angle2;
-          vis_pitch_filtered = dbg_angle4;
-          dbg_spd_ff = 0.0f;
-          angle_pid2.i_out = 0.0f;
-          angle_pid4.i_out = 0.0f;
-          speed_pid2.i_out = 0.0f;
-          speed_pid4.i_out = 0.0f;
-          state2 = STATE_TRACK;
-          state4 = STATE_TRACK;
+          /* 上电暖机期：丢弃此帧，不累计确认计数，不切自瞄 */
+          vis_warmup_cnt++;
+          track_confirm_cnt      = 0;
+          dbg_vis_warmup_cnt     = vis_warmup_cnt;  /* 供 Ozone 观测暖机进度 */
+        }
+        else
+        {
+          /* 暖机结束：正常累计确认帧数 */
+          track_confirm_cnt++;
+          if (state2 != STATE_TRACK && track_confirm_cnt >= TRACK_CONFIRM_FRAMES)
+          {
+            /* 连续 TRACK_CONFIRM_FRAMES 帧确认，切入自瞄
+             * 用当前编码器位置初始化低通滤波器，切入瞬间目标=当前位置，
+             * 低通以 VIS_LPF_ALPHA 速率平滑收敛到视觉角度，
+             * 避免目标跳变导致电机猛冲把装甲板甩出视野
+             * 同时清前馈和 PID 积分 */
+            vis_yaw_filtered   = dbg_angle2;
+            vis_pitch_filtered = dbg_angle4;
+            dbg_spd_ff = 0.0f;
+            angle_pid2.i_out = 0.0f;
+            angle_pid4.i_out = 0.0f;
+            speed_pid2.i_out = 0.0f;
+            speed_pid4.i_out = 0.0f;
+            state2 = STATE_TRACK;
+            state4 = STATE_TRACK;
+          }
         }
       }
       else if (state2 != STATE_TRACK)
       {
-        /* 非自瞄状态且无有效视觉帧：重置确认计数 */
+        /* 非自瞄状态且无有效视觉帧：重置确认计数（暖机计数不重置）*/
         track_confirm_cnt = 0;
       }
 
@@ -954,24 +1059,94 @@ int main(void)
 
         if (ret2_done && ret4_done)
         {
-          returning_lock = 0;   /* 解锁，允许视觉重新切入自瞄 */
-          state2     = STATE_SCAN;
-          state4     = STATE_SCAN;
-          scan_phase = 0.0f;   /* 相位归零，从 sin(0)=0 重新开始，无位置跳变 */
-          prof_pos   = 0.0f;
-          homing_target2 = 0.0f;
-          homing_target4 = 0.0f;
+          returning_lock   = 0;       /* 解锁，允许视觉重新切入自瞄 */
+          state2           = STATE_SCAN;
+          state4           = STATE_SCAN;
+          scan_phase       = 0.0f;    /* yaw 相位归零，从 sin(0)=0 重新开始 */
+          scan_phase_pitch = 0.0f;    /* pitch 相位同步归零 */
+          prof_pos         = 0.0f;
+          prof_pos_pitch   = 0.0f;
+          homing_target2   = 0.0f;
+          homing_target4   = 0.0f;
         }
       }
 
-      /* ---- 4a-5. 扫描阶段：更新正弦轨迹 ---- */
+      /* ---- 4a-5. 扫描阶段：yaw/pitch 独立正弦轨迹 + 速度前馈 ----
+       *
+       *  Yaw  （ID2）：幅值 SCAN_AMP（±60°），频率 SCAN_FREQ（0.5Hz）
+       *  Pitch（ID4）：幅值 SCAN_AMP_PITCH（±40°），频率 SCAN_FREQ_PITCH（1.5Hz）
+       *  两轴相位独立累加，互不干扰。
+       *
+       *  速度前馈 = 幅值 × ω × cos(ωt)，与位置目标同号方向（已取反与位置目标一致）
+       *  前馈让电机提前知道目标速度，大幅减少高速时的跟踪误差和峰值毛刺。
+       * ---------------------------------------------------------------- */
+      float spd_ff_yaw   = 0.0f;   /* yaw  轴速度前馈（°/s），非扫描状态保持 0 */
+      float spd_ff_pitch = 0.0f;   /* pitch 轴速度前馈（°/s），非扫描状态保持 0 */
+      float accel_ff_yaw   = 0.0f; /* yaw  轴加速度前馈，补偿惯性滞后 */
+      float accel_ff_pitch = 0.0f; /* pitch 轴加速度前馈，补偿惯性滞后 */
+
       if (state2 == STATE_SCAN)
       {
-        scan_phase += dt;
-        float omega    = 2.0f * (float)M_PI * SCAN_FREQ;
-        prof_pos       = SCAN_AMP * sinf(omega * scan_phase);
-        float ff_deg_s = SCAN_AMP * omega * cosf(omega * scan_phase);
-        dbg_spd_ff     = ff_deg_s * SPEED_FF_GAIN;
+        /* ---- 阶跃测试模式（step_test_en=1 时取代正弦扫描）---- */
+        if (step_test_en)
+        {
+          /* 边沿检测：step_trigger 0→1 触发一次阶跃 */
+          if (step_trigger && !step_trigger_last)
+          {
+            /* 硬限幅，防止超出机械范围 */
+            float tgt_y = step_target_yaw;
+            float tgt_p = step_target_pitch;
+            if      (tgt_y >  TRACK_LIMIT_YAW)   tgt_y =  TRACK_LIMIT_YAW;
+            else if (tgt_y < -TRACK_LIMIT_YAW)   tgt_y = -TRACK_LIMIT_YAW;
+            if      (tgt_p >  TRACK_LIMIT_PITCH)  tgt_p =  TRACK_LIMIT_PITCH;
+            else if (tgt_p < -TRACK_LIMIT_PITCH)  tgt_p = -TRACK_LIMIT_PITCH;
+
+            prof_pos       = tgt_y;
+            prof_pos_pitch = tgt_p;
+            dbg_step_ref2  = -tgt_y;
+            dbg_step_ref4  = tgt_p;
+            dbg_step_t0_ms = HAL_GetTick();
+
+            /* 阶跃切换时清 PID 积分，避免积分残余导致超调虚高 */
+            angle_pid2.i_out = 0.0f;
+            angle_pid4.i_out = 0.0f;
+            speed_pid2.i_out = 0.0f;
+            speed_pid4.i_out = 0.0f;
+          }
+          step_trigger_last = step_trigger;
+          step_trigger      = 0;  /* 自动清零，保证单次触发 */
+
+          /* 阶跃模式下无前馈（纯 PID 响应，测指标更准确）*/
+          spd_ff_yaw   = 0.0f;
+          spd_ff_pitch = 0.0f;
+          accel_ff_yaw   = 0.0f;
+          accel_ff_pitch = 0.0f;
+          dbg_spd_ff = 0.0f;
+        }
+        else
+        {
+          /* ---- 正常扫描模式（正弦轨迹 + 速度/加速度前馈）---- */
+          scan_phase       += dt;
+          scan_phase_pitch += dt;
+
+          float omega_yaw   = 2.0f * (float)M_PI * SCAN_FREQ;
+          float omega_pitch = 2.0f * (float)M_PI * SCAN_FREQ_PITCH;
+
+          prof_pos       = SCAN_AMP       * sinf(omega_yaw   * scan_phase);
+          prof_pos_pitch = SCAN_AMP_PITCH * sinf(omega_pitch * scan_phase_pitch);
+
+          /* 速度前馈：正弦位置目标的一阶导数 = -幅值 × ω × cos(ωt) */
+          spd_ff_yaw   = -SPEED_FF_GAIN * SCAN_AMP       * omega_yaw   * cosf(omega_yaw   * scan_phase);
+          spd_ff_pitch = -SPEED_FF_GAIN * SCAN_AMP_PITCH * omega_pitch * cosf(omega_pitch * scan_phase_pitch);
+
+          /* 加速度前馈：速度前馈的一阶导数 = 幅值 × ω² × sin(ωt)
+           * 补偿电机惯性引起的加减速段滞后误差
+           * tgt = -sin，二阶导 = +sin，故符号为正 */
+          accel_ff_yaw   = -SPEED_FF_GAIN * SCAN_AMP       * omega_yaw   * omega_yaw   * sinf(omega_yaw   * scan_phase);
+          accel_ff_pitch = -SPEED_FF_GAIN * SCAN_AMP_PITCH * omega_pitch * omega_pitch * sinf(omega_pitch * scan_phase_pitch);
+
+          dbg_spd_ff = spd_ff_yaw;  /* Ozone 观测 yaw 前馈，应为余弦波形 */
+        }
       }
 
       /* ---- 4a-6. Ozone 调试变量 ---- */
@@ -981,18 +1156,18 @@ int main(void)
       else if (state2 == STATE_RETURNING) dbg_state = 2;
       else                                dbg_state = 3;
 
-      dbg_prof = prof_pos;
+      dbg_prof       = -prof_pos;
+      dbg_prof_pitch = prof_pos_pitch;
 
       /* ================================================================
        * 4b. PID 计算
        *
        *   STATE_TRACK               目标 = 视觉绝对角度（已限位）
        *   STATE_HOMING/RETURNING    目标 = 各轴独立 homing_target（解耦归零）
-       *   STATE_SCAN                目标 = prof_pos（正弦扫描轨迹）
+       *   STATE_SCAN                目标 = 各轴独立扫描轨迹 + 速度前馈
        *
-       *   ID2（yaw 轴）  ：target = -track_target_yaw / -homing_target2 / -prof_pos
-       *   ID4（pitch 轴）：target = -track_target_pitch / -homing_target4 / -prof_pos
-       *   负号含义与原始代码一致（电机安装方向取反）
+       *   ID2（yaw 轴）  ：扫描目标 = prof_pos（±60°正弦）
+       *   ID4（pitch 轴）：扫描目标 = prof_pos_pitch（±40°正弦，频率更高）
        * ================================================================ */
 
       /* ---- ID2 PID（yaw 轴）---- */
@@ -1011,10 +1186,10 @@ int main(void)
         angle_pid2.d_out  = angle_pid2.kd * (angle_pid2.err[0] - angle_pid2.err[1]);
         float pid_spd2    = angle_pid2.p_out + angle_pid2.i_out + angle_pid2.d_out;
 
-        /* 自瞄时不叠加扫描前馈；回零时单独限幅，防止全速冲向零点甩过 */
-        float ff2         = (state2 == STATE_TRACK) ? 0.0f : dbg_spd_ff;
+        /* 速度环：前馈不叠加到速度目标，避免被 KP 二次放大
+         * 回零时单独限幅，防止全速冲向零点甩过 */
         float out_max2    = (state2 == STATE_RETURNING) ? RETURN_ANGLE_OUT_MAX : angle_pid2.out_max;
-        float spd_target2 = pid_spd2 + ff2;
+        float spd_target2 = pid_spd2;
         LIMIT_MIN_MAX(spd_target2, -out_max2, out_max2);
 
         float spd_err2    = spd_target2 - filtered_spd2;
@@ -1025,6 +1200,14 @@ int main(void)
         LIMIT_MIN_MAX(speed_pid2.i_out, -speed_pid2.i_max, speed_pid2.i_max);
         speed_pid2.d_out  = speed_pid2.kd * (speed_pid2.err[0] - speed_pid2.err[1]);
         dbg_voltage2      = speed_pid2.p_out + speed_pid2.i_out + speed_pid2.d_out;
+
+        /* 速度前馈 + 加速度前馈直接叠加到电压，绕过速度环 KP 放大 */
+        if (state2 == STATE_SCAN)
+        {
+          dbg_voltage2 += spd_ff_yaw   * SPEED_FF_VOLTAGE;
+          dbg_voltage2 += accel_ff_yaw * ACCEL_FF_VOLTAGE;
+        }
+
         LIMIT_MIN_MAX(dbg_voltage2, -speed_pid2.out_max, speed_pid2.out_max);
       }
 
@@ -1032,7 +1215,7 @@ int main(void)
       {
         float tgt4;
         if      (state4 == STATE_TRACK)     tgt4 = track_target_pitch;
-        else if (state4 == STATE_SCAN)      tgt4 = -prof_pos;
+        else if (state4 == STATE_SCAN)      tgt4 = prof_pos_pitch;   /* 改用 pitch 独立轨迹 */
         else /* HOMING / RETURNING */       tgt4 = -homing_target4;
 
         dbg_err4          = angle_err_calc(tgt4, dbg_angle4);
@@ -1044,10 +1227,10 @@ int main(void)
         angle_pid4.d_out  = angle_pid4.kd * (angle_pid4.err[0] - angle_pid4.err[1]);
         float pid_spd4    = angle_pid4.p_out + angle_pid4.i_out + angle_pid4.d_out;
 
-        /* 自瞄时不叠加扫描前馈；回零时单独限幅，防止全速冲向零点甩过 */
-        float ff4         = (state4 == STATE_TRACK) ? 0.0f : dbg_spd_ff;
+        /* 速度环：前馈不叠加到速度目标，避免被 KP 二次放大
+         * 回零时单独限幅，防止全速冲向零点甩过 */
         float out_max4    = (state4 == STATE_RETURNING) ? RETURN_ANGLE_OUT_MAX : angle_pid4.out_max;
-        float spd_target4 = pid_spd4 + ff4;
+        float spd_target4 = pid_spd4;
         LIMIT_MIN_MAX(spd_target4, -out_max4, out_max4);
 
         float spd_err4    = spd_target4 - filtered_spd4;
@@ -1058,6 +1241,14 @@ int main(void)
         LIMIT_MIN_MAX(speed_pid4.i_out, -speed_pid4.i_max, speed_pid4.i_max);
         speed_pid4.d_out  = speed_pid4.kd * (speed_pid4.err[0] - speed_pid4.err[1]);
         dbg_voltage4      = speed_pid4.p_out + speed_pid4.i_out + speed_pid4.d_out;
+
+        /* 速度前馈 + 加速度前馈直接叠加到电压，绕过速度环 KP 放大 */
+        if (state4 == STATE_SCAN)
+        {
+          dbg_voltage4 += spd_ff_pitch   * SPEED_FF_VOLTAGE;
+          dbg_voltage4 += accel_ff_pitch * ACCEL_FF_VOLTAGE;
+        }
+
         LIMIT_MIN_MAX(dbg_voltage4, -speed_pid4.out_max, speed_pid4.out_max);
       }
 
@@ -1151,7 +1342,6 @@ void Error_Handler(void)
   *         where the assert_param error has occurred.
   * @param  file: pointer to the source file name
   * @param  line: assert_param error line source number
-  * @retval None
   */
 void assert_failed(uint8_t *file, uint32_t line)
 {

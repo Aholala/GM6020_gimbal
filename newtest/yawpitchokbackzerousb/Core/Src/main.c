@@ -93,7 +93,8 @@ extern moto_info_t motor_info[MOTOR_MAX_NUM];
 #define PF_NEFF_THRESH  (PF_PARTICLE_NUM / 2.0f)
 
 /* ===== 正弦扫描参数 ================================================= */
-#define SCAN_AMP       40.0f
+#define SCAN_AMP2      60.0f   /* ID2 yaw  轴扫描幅值（°）*/
+#define SCAN_AMP4      40.0f   /* ID4 pitch 轴扫描幅值（°）*/
 #define SCAN_FREQ       0.1f
 #define SPEED_FF_GAIN   0.0f
 #define HOMING_SPEED   20.0f
@@ -148,7 +149,8 @@ typedef enum {
 ctrl_state_t state2 = STATE_HOMING;
 ctrl_state_t state4 = STATE_HOMING;
 
-float prof_pos   = 0.0f;
+float prof_pos   = 0.0f;   /* ID2 yaw  轴扫描位置（°）*/
+float prof_pos4  = 0.0f;   /* ID4 pitch 轴扫描位置（°）*/
 float scan_phase = 0.0f;
 float dbg_spd_ff = 0.0f;
 
@@ -217,7 +219,7 @@ uint32_t lost_timer_ms = 0;
  * ================================================================== */
 volatile float   dbg_angle2       = 0.0f;
 volatile float   dbg_angle4       = 0.0f;
-volatile float   dbg_prof         = 0.0f;
+volatile float   dbg_prof_yaw         = 0.0f;
 volatile float   dbg_err2         = 0.0f;
 volatile float   dbg_err4         = 0.0f;
 volatile float   dbg_voltage2     = 0.0f;
@@ -902,6 +904,7 @@ int main(void)
           state4     = STATE_SCAN;
           scan_phase = 0.0f;   /* 相位归零，从 sin(0)=0 重新开始，无位置跳变 */
           prof_pos   = 0.0f;
+          prof_pos4  = 0.0f;
           homing_target2 = 0.0f;
           homing_target4 = 0.0f;
         }
@@ -912,8 +915,9 @@ int main(void)
       {
         scan_phase += dt;
         float omega    = 2.0f * (float)M_PI * SCAN_FREQ;
-        prof_pos       = SCAN_AMP * sinf(omega * scan_phase);
-        float ff_deg_s = SCAN_AMP * omega * cosf(omega * scan_phase);
+        prof_pos       = SCAN_AMP2 * sinf(omega * scan_phase);  /* ID2 yaw  ±60° */
+        prof_pos4      = SCAN_AMP4 * sinf(omega * scan_phase);  /* ID4 pitch ±40° */
+        float ff_deg_s = SCAN_AMP2 * omega * cosf(omega * scan_phase);
         dbg_spd_ff     = ff_deg_s * SPEED_FF_GAIN;
       }
 
@@ -924,7 +928,7 @@ int main(void)
       else if (state2 == STATE_RETURNING) dbg_state = 2;
       else                                dbg_state = 3;
 
-      dbg_prof = prof_pos;
+      dbg_prof_yaw = -prof_pos;
 
       /* ================================================================
        * 4b. PID 计算
@@ -974,7 +978,7 @@ int main(void)
       {
         float tgt4;
         if      (state4 == STATE_TRACK)     tgt4 = -track_target_pitch;
-        else if (state4 == STATE_SCAN)      tgt4 = -prof_pos;
+        else if (state4 == STATE_SCAN)      tgt4 = -prof_pos4;
         else /* HOMING / RETURNING */       tgt4 = -homing_target4;
 
         dbg_err4          = angle_err_calc(tgt4, dbg_angle4);

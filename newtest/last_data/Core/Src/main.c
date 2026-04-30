@@ -1,20 +1,20 @@
 /* USER CODE BEGIN Header */
 /**
- ******************************************************************************
- * @file           : main.c
- * @brief          : Main program body
- ******************************************************************************
- * @attention
- *
- * Copyright (c) 2026 STMicroelectronics.
- * All rights reserved.
- *
- * This software is licensed under terms that can be found in the LICENSE file
- * in the root directory of this software component.
- * If no LICENSE file comes with this software, it is provided AS-IS.
- *
- ******************************************************************************
- */
+  ******************************************************************************
+  * @file           : main.c
+  * @brief          : Main program body
+  ******************************************************************************
+  * @attention
+  *
+  * Copyright (c) 2026 STMicroelectronics.
+  * All rights reserved.
+  *
+  * This software is licensed under terms that can be found in the LICENSE file
+  * in the root directory of this software component.
+  * If no LICENSE file comes with this software, it is provided AS-IS.
+  *
+  ******************************************************************************
+  */
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
@@ -38,6 +38,8 @@
 #include "AKF.h"
 #include "Config.h"
 
+
+
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -55,12 +57,35 @@
 
 extern moto_info_t motor_info[MOTOR_MAX_NUM];
 /* 1=开环测试（固定电压），0=闭环控制 */
-#define OPEN_LOOP_TEST 0
+#define OPEN_LOOP_TEST    0
 #define OPEN_LOOP_VOLTAGE 5000
 
+/* ===== 性能测试模式 =================================================
+ *
+ *  TEST_MODE   0 = 正常运行（不影响任何原有逻辑）
+ *              1 = 阶跃响应测试
+ *              2 = 正弦跟踪测试
+ *
+ *  上电后默认 TEST_MODE=0，在 Ozone Watch 窗口实时修改 dbg_test_mode
+ *  的值即可切换，无需重新烧录。
+ *
+ *  【阶跃测试（dbg_test_mode=1）】
+ *    在 Ozone 里修改 dbg_step_yaw / dbg_step_pitch 即可触发阶跃。
+ *    观测变量：dbg_tgt_yaw / dbg_tgt_pitch（目标）
+ *              dbg_angle2 / dbg_angle4（实际）
+ *              dbg_err2   / dbg_err4  （误差）
+ *
+ *  【正弦跟踪测试（dbg_test_mode=2）】
+ *    修改 dbg_sine_amp_yaw / dbg_sine_freq_yaw（同理 pitch）设置参数，
+ *    目标 = A·sin(2π·f·t)，无需重新编译。
+ *    观测变量：dbg_tgt_yaw / dbg_tgt_pitch（目标正弦）
+ *              dbg_angle2 / dbg_angle4（实际跟随）
+ *              dbg_err2   / dbg_err4  （逐点误差，导出后算 MAE/RMSE）
+ * ================================================================== */
+
 /* ===== 电机索引 ===================================================== */
-#define MOTOR2_IDX 2
-#define MOTOR4_IDX 4
+#define MOTOR2_IDX  2
+#define MOTOR4_IDX  4
 
 /* ===== IMU 参数 ===================================================== */
 /*
@@ -70,9 +95,9 @@ extern moto_info_t motor_info[MOTOR_MAX_NUM];
  *  ACCEL_VALID_MIN/MAX 加速度幅值门限（m/s²）
  *                     超出范围时跳过加速度纠正，避免振动/冲击干扰。
  */
-#define GYRO_CALIB_MS 2000    /* 2 秒 = 200 次采样（10ms/次）*/
-#define ACCEL_VALID_MIN 5.0f  /* 约 0.82g */
-#define ACCEL_VALID_MAX 15.0f /* 约 1.12g */
+#define GYRO_CALIB_MS    2000    /* 2 秒 = 200 次采样（10ms/次）*/
+#define ACCEL_VALID_MIN   5.0f  /* 约 0.82g */
+#define ACCEL_VALID_MAX  15.0f  /* 约 1.12g */
 
 /* ===== AKF 初始化参数 =============================================== */
 /*
@@ -80,39 +105,70 @@ extern moto_info_t motor_info[MOTOR_MAX_NUM];
  *  AKF_Q0   初始系统噪声方差（后续自适应，初值影响不大）
  *  R0 由校准阶段 Welford 在线计算，无需手动设置
  */
-#define AKF_P0 1.0f
-#define AKF_Q0 1e-7f
+#define AKF_P0  1.0f
+#define AKF_Q0  1e-7f
 
 /* ===== 粒子滤波参数 ================================================= */
 /*
  *  PF_NEFF_THRESH   有效粒子数阈值，低于此值触发重采样
  *                   推荐 PF_PARTICLE_NUM / 2
  */
-#define PF_NEFF_THRESH (PF_PARTICLE_NUM / 2.0f)
+#define PF_NEFF_THRESH  (PF_PARTICLE_NUM / 2.0f)
 
 /* ===== 正弦扫描参数 ================================================= */
-#define SCAN_AMP 40.0f
-#define SCAN_FREQ 0.1f
-#define SPEED_FF_GAIN 0.0f
-#define HOMING_SPEED 20.0f         /* 上电归零速度（°/s）*/
-#define RETURN_SPEED 60.0f         /* 丢目标回零虚拟目标步进速度（°/s），需 ≥ 电机最大跟踪速度 */
-#define RETURN_ANGLE_OUT_MAX 80.0f /* 回零时位置环输出限幅（°/s），防止全速冲向零点甩过 */
-#define HOMING_THRESH 3.0f
+/* Yaw 轴（ID2）扫描参数 */
+#define SCAN_AMP        60.0f   /* yaw 扫描幅值 ±60° */
+#define SCAN_FREQ        0.3f   /* yaw 扫描频率 Hz */
+
+/* Pitch 轴（ID4）扫描参数（独立，比 yaw 快）*/
+#define SCAN_AMP_PITCH  40.0f   /* pitch 扫描幅值 ±40° */
+#define SCAN_FREQ_PITCH  1.0f   /* pitch 扫描频率 Hz，约为 yaw 的 3 倍 */
+
+/* ===== 速度前馈增益 =================================================
+ *  SPEED_FF_GAIN     前馈系数（0~1.2），从 1.0 开始调
+ *
+ *  SPEED_FF_VOLTAGE  前馈电压换算系数（电压单位 / (°/s)）
+ *                    前馈直接叠加到最终电压输出，绕过速度环 KP 放大，
+ *                    避免速度环对前馈信号二次放大导致振荡。
+ *                    初始值与 SPEED_KP 相同；Ozone 里实时微调：
+ *                      偏小 → 误差峰值仍大  偏大 → 超调/电压饱和
+ * ================================================================== */
+#define SPEED_FF_GAIN      1.0f
+#define SPEED_FF_VOLTAGE  40.0f   /* 速度前馈电压系数，初始值 = SPEED_KP */
+#define ACCEL_FF_VOLTAGE   0.0f   /* 加速度前馈暂时关闭 */
+#define HOMING_SPEED   10.0f   /* 上电归零速度（°/s）*/
+#define RETURN_SPEED   60.0f   /* 丢目标回零虚拟目标步进速度（°/s），需 ≥ 电机最大跟踪速度 */
+#define RETURN_ANGLE_OUT_MAX  80.0f  /* 回零时位置环输出限幅（°/s），防止全速冲向零点甩过 */
+#define HOMING_THRESH   3.0f
 
 /* ===== PID 参数 ===================================================== */
-#define ANGLE_KP 6.0f
-#define ANGLE_KI 0.5f
-#define ANGLE_KD 0.0f
-#define ANGLE_I_MAX 40.0f
-#define ANGLE_OUT_MAX 250.0f
+/* Yaw 轴（ID2）位置环 */
+#define ANGLE_KP_YAW    10.0f
+#define ANGLE_KI_YAW    0.0f
+#define ANGLE_KD_YAW    0.0f
 
-#define SPEED_KP 100.0f
-#define SPEED_KI 0.05f
-#define SPEED_KD 0.0f
-#define SPEED_I_MAX 4000.0f
-#define SPEED_OUT_MAX 10000.0f // 25000
+/* Pitch 轴（ID4）位置环 */
+#define ANGLE_KP_PITCH  6.0f
+#define ANGLE_KI_PITCH  0.0f
+#define ANGLE_KD_PITCH  0.0f
 
-#define LPF_ALPHA 0.5f
+#define ANGLE_I_MAX    40.0f
+#define ANGLE_OUT_MAX 300.0f
+
+/* Yaw 轴（ID2）速度环 —— 需要更大 KP 克服 ±50° 附近的机械阻力 */
+#define SPEED_KP_YAW   70.0f   /* 从 50 开始往上调，直到 ±50° 不再卡顿 */
+#define SPEED_KI_YAW    0.01f
+#define SPEED_KD_YAW    0.0f
+
+/* Pitch 轴（ID4）速度环 —— 已经丝滑，保持不动 */
+#define SPEED_KP_PITCH  30.0f
+#define SPEED_KI_PITCH  0.01f
+#define SPEED_KD_PITCH  0.0f
+
+#define SPEED_I_MAX  4000.0f
+#define SPEED_OUT_MAX 15000.0f
+
+#define LPF_ALPHA  0.05f        /* 加强速度平滑，减小量化噪声对速度环的影响 */
 
 /* ===== 自瞄 / 哨兵模式切换参数 ===================================== */
 /*
@@ -123,25 +179,25 @@ extern moto_info_t motor_info[MOTOR_MAX_NUM];
  *  TRACK_CONFIRM_FRAMES  连续检测到目标的帧数门限，达到后才切入自瞄
  *                        防止 detected 单帧抖动误触发状态切换
  */
-#define TRACK_LIMIT_YAW 60.0f
-#define TRACK_LIMIT_PITCH 40.0f
-#define LOST_TIMEOUT_MS 500
-#define RETURN_THRESH 3.0f
-#define TRACK_CONFIRM_FRAMES 5 /* 连续 5 帧（50ms）确认后才切入自瞄 */
+#define TRACK_LIMIT_YAW    60.0f
+#define TRACK_LIMIT_PITCH  40.0f
+#define LOST_TIMEOUT_MS    500
+#define RETURN_THRESH       3.0f
+#define TRACK_CONFIRM_FRAMES  1   /* 连续 5 帧（50ms）确认后才切入自瞄 */
 
 /* ===== 视觉目标角度低通滤波参数 =====================================
  *  VIS_LPF_ALPHA  一阶低通系数（0~1），越小越平滑响应越慢
  *                 用于抑制电机抖动引起的视觉反馈振荡
  *                 推荐从 0.3 开始调，振荡消了再慢慢调大
  * =================================================================== */
-#define VIS_LPF_ALPHA 0.1f
+#define VIS_LPF_ALPHA  0.1f
 
 /* ===== 视觉跳变帧保护 ===============================================
  *  VIS_JUMP_THRESH  单帧视觉角度变化阈值（°）
  *                   超过此值认为是跳变帧，直接丢弃不更新目标
  *                   根据目标最大运动速度调整，推荐从 10° 开始
  * =================================================================== */
-#define VIS_JUMP_THRESH 10.0f
+#define VIS_JUMP_THRESH  10.0f
 
 /* 每个电机独立的 PID */
 pid_struct_t angle_pid2, angle_pid4;
@@ -155,8 +211,7 @@ pid_struct_t speed_pid2, speed_pid4;
  *  STATE_TRACK     自瞄跟随（视觉角度直接作为目标位置，带限位保护）
  *
  * ================================================================= */
-typedef enum
-{
+typedef enum {
   STATE_HOMING = 0,
   STATE_SCAN,
   STATE_RETURNING,
@@ -166,15 +221,21 @@ typedef enum
 ctrl_state_t state2 = STATE_HOMING;
 ctrl_state_t state4 = STATE_HOMING;
 
-float prof_pos = 0.0f;
-float scan_phase = 0.0f;
+/* Yaw 轴（ID2）扫描轨迹 */
+float prof_pos       = 0.0f;
+float scan_phase     = 0.0f;
+
+/* Pitch 轴（ID4）独立扫描轨迹 */
+float prof_pos_pitch   = 0.0f;
+float scan_phase_pitch = 0.0f;
+
 float dbg_spd_ff = 0.0f;
 
 /* 归零阶段各轴独立虚拟目标（°）
  *   STATE_HOMING / STATE_RETURNING 时使用，与 prof_pos 互不干扰
  *   STATE_SCAN / STATE_TRACK 时不再使用（由 prof_pos 或视觉角度接管）*/
-float homing_target2 = 0.0f; /* ID2 yaw  轴归零虚拟目标 */
-float homing_target4 = 0.0f; /* ID4 pitch 轴归零虚拟目标 */
+float homing_target2 = 0.0f;   /* ID2 yaw  轴归零虚拟目标 */
+float homing_target4 = 0.0f;   /* ID4 pitch 轴归零虚拟目标 */
 
 float filtered_spd2 = 0.0f;
 float filtered_spd4 = 0.0f;
@@ -183,19 +244,19 @@ uint16_t zero_enc2 = 0;
 uint16_t zero_enc4 = 0;
 
 /* 自瞄目标角度（°），视觉下发绝对角度，直接赋值使用，带限位 clamp */
-float track_target_yaw = 0.0f;   /* ID2 yaw 目标 */
-float track_target_pitch = 0.0f; /* ID4 pitch 目标 */
+float track_target_yaw   = 0.0f;  /* ID2 yaw 目标 */
+float track_target_pitch = 0.0f;  /* ID4 pitch 目标 */
 
 /* 视觉零点与编码器零点的偏移（°）
  * 标定方法：让云台静止在编码器零点（dbg_angle2=0），
  * 视觉对准正前方装甲板，读取此时 dbg_vis_yaw 的值填入下方，
  * 或直接在 Ozone 里实时修改 vis_yaw_offset / vis_pitch_offset */
-float vis_yaw_offset = 0.0f;   /* 上电后在 Ozone 里标定 */
-float vis_pitch_offset = 0.0f; /* 上电后在 Ozone 里标定 */
+float vis_yaw_offset   = 0.0f;   /* 上电后在 Ozone 里标定 */
+float vis_pitch_offset = 0.0f;   /* 上电后在 Ozone 里标定 */
 
 /* 视觉目标角度低通滤波器状态（全局，供 Ozone 观测）
  * 切入 STATE_TRACK 时用编码器位置初始化，平滑收敛到视觉角度 */
-volatile float vis_yaw_filtered = 0.0f;
+volatile float vis_yaw_filtered   = 0.0f;
 volatile float vis_pitch_filtered = 0.0f;
 
 /* 回零保护锁：STATE_RETURNING 期间置 1，屏蔽视觉切入逻辑
@@ -209,7 +270,8 @@ uint32_t lost_timer_ms = 0;
  *
  *  电机相关：
  *    dbg_angle2 / dbg_angle4      当前角度（°）
- *    dbg_prof                     扫描阶段共用虚拟目标（STATE_SCAN）
+ *    dbg_prof                     yaw 扫描阶段虚拟目标（STATE_SCAN）
+ *    dbg_prof_pitch               pitch 扫描阶段虚拟目标（STATE_SCAN）
  *                                 归零阶段请分别观测 homing_target2/4
  *    dbg_err2 / dbg_err4          跟踪误差
  *    dbg_voltage2 / dbg_voltage4  输出电压
@@ -249,63 +311,105 @@ uint32_t lost_timer_ms = 0;
  *    vis_rx_lastlen               最近一次收到的原始长度（应为 11）
  *
  * ================================================================== */
-volatile float dbg_angle2 = 0.0f;
-volatile float dbg_angle4 = 0.0f;
-volatile float dbg_prof = 0.0f;
-volatile float dbg_err2 = 0.0f;
-volatile float dbg_err4 = 0.0f;
-volatile float dbg_voltage2 = 0.0f;
-volatile float dbg_voltage4 = 0.0f;
-volatile int dbg_state = 0;
+volatile float   dbg_angle2       = 0.0f;
+volatile float   dbg_angle4       = 0.0f;
+volatile float   dbg_prof         = 0.0f;
+volatile float   dbg_prof_pitch   = 0.0f;  /* pitch 独立扫描目标，供 Ozone 观测 */
+volatile float   dbg_err2         = 0.0f;
+volatile float   dbg_err4         = 0.0f;
+volatile float   dbg_voltage2     = 0.0f;
+volatile float   dbg_voltage4     = 0.0f;
+volatile int     dbg_state        = 0;
 
-volatile fp32 dbg_gyro_x = 0.0f;
-volatile fp32 dbg_gyro_y = 0.0f;
-volatile fp32 dbg_gyro_z = 0.0f;
-volatile fp32 dbg_accel_x = 0.0f;
-volatile fp32 dbg_accel_y = 0.0f;
-volatile fp32 dbg_accel_z = 0.0f;
-volatile fp32 dbg_temp = 0.0f;
-volatile uint8_t dbg_imu_error = 0;
+volatile fp32    dbg_gyro_x       = 0.0f;
+volatile fp32    dbg_gyro_y       = 0.0f;
+volatile fp32    dbg_gyro_z       = 0.0f;
+volatile fp32    dbg_accel_x      = 0.0f;
+volatile fp32    dbg_accel_y      = 0.0f;
+volatile fp32    dbg_accel_z      = 0.0f;
+volatile fp32    dbg_temp         = 0.0f;
+volatile uint8_t dbg_imu_error    = 0;
 
-volatile float dbg_gx_akf = 0.0f;
-volatile float dbg_gy_akf = 0.0f;
-volatile float dbg_gz_akf = 0.0f;
+volatile float   dbg_gx_akf       = 0.0f;
+volatile float   dbg_gy_akf       = 0.0f;
+volatile float   dbg_gz_akf       = 0.0f;
 
-volatile float dbg_roll_mahony = 0.0f;
-volatile float dbg_pitch_mahony = 0.0f;
-volatile float dbg_roll = 0.0f;
-volatile float dbg_pitch = 0.0f;
-volatile float dbg_yaw = 0.0f;     /* IMU Mahony yaw（仅供对比观测，不参与控制）*/
-volatile float dbg_yaw_enc = 0.0f; /* 编码器 yaw（ID2 实际反馈，控制用此值）*/
+volatile float   dbg_roll_mahony  = 0.0f;
+volatile float   dbg_pitch_mahony = 0.0f;
+volatile float   dbg_roll         = 0.0f;
+volatile float   dbg_pitch        = 0.0f;
+volatile float   dbg_yaw          = 0.0f;   /* IMU Mahony yaw（仅供对比观测，不参与控制）*/
+volatile float   dbg_yaw_enc      = 0.0f;   /* 编码器 yaw（ID2 实际反馈，控制用此值）*/
 
-volatile int dbg_calib_samples = 0;
-volatile float dbg_r0_gx = 0.0f;
-volatile float dbg_r0_gy = 0.0f;
-volatile float dbg_r0_gz = 0.0f;
+volatile int     dbg_calib_samples = 0;
+volatile float   dbg_r0_gx        = 0.0f;
+volatile float   dbg_r0_gy        = 0.0f;
+volatile float   dbg_r0_gz        = 0.0f;
 
 /* 视觉下行帧观测 */
-volatile uint8_t dbg_vis_detected = 0; /* 是否检测到目标（0/1）*/
-volatile float dbg_vis_yaw = 0.0f;     /* 视觉下发 yaw（单位与视觉协议一致）*/
-volatile float dbg_vis_pitch = 0.0f;   /* 视觉下发 pitch（单位与视觉协议一致）*/
+volatile uint8_t dbg_vis_detected = 0;      /* 是否检测到目标（0/1）*/
+volatile float   dbg_vis_yaw      = 0.0f;   /* 视觉下发 yaw（单位与视觉协议一致）*/
+volatile float   dbg_vis_pitch    = 0.0f;   /* 视觉下发 pitch（单位与视觉协议一致）*/
 
 /* 视觉接收诊断（定义在 bsp_usb.c，此处 extern 供 Ozone 观测）*/
-extern volatile uint32_t vis_rx_total;   /* 收到的总帧次 */
-extern volatile uint32_t vis_rx_ok;      /* 解析成功次数 */
-extern volatile uint32_t vis_rx_badlen;  /* 长度错误次数 */
-extern volatile uint32_t vis_rx_badhdr;  /* 帧头错误次数 */
-extern volatile uint32_t vis_rx_badchk;  /* 校验错误次数 */
-extern volatile uint32_t vis_rx_lastlen; /* 最近一次收到的原始长度 */
-extern volatile uint8_t vis_rx_raw[16];
+extern volatile uint32_t vis_rx_total;    /* 收到的总帧次 */
+extern volatile uint32_t vis_rx_ok;       /* 解析成功次数 */
+extern volatile uint32_t vis_rx_badlen;   /* 长度错误次数 */
+extern volatile uint32_t vis_rx_badhdr;   /* 帧头错误次数 */
+extern volatile uint32_t vis_rx_badchk;   /* 校验错误次数 */
+extern volatile uint32_t vis_rx_lastlen;  /* 最近一次收到的原始长度 */
+extern volatile uint8_t  vis_rx_raw[16];
 extern volatile uint32_t vis_rx_raw_len;
+
+/* ===== 性能测试变量（Ozone 实时可写）================================
+ *
+ *  dbg_test_mode       0=正常  1=阶跃测试  2=正弦跟踪测试
+ *
+ *  ---- 阶跃测试参数 ----
+ *  dbg_step_yaw        yaw  阶跃目标（°），Ozone 里直接改值触发阶跃
+ *  dbg_step_pitch      pitch 阶跃目标（°）
+ *
+ *  ---- 正弦跟踪测试参数 ----
+ *  dbg_sine_amp_yaw    yaw  正弦幅值（°），对应题目 A
+ *  dbg_sine_freq_yaw   yaw  正弦频率（Hz），对应题目 1/T
+ *  dbg_sine_amp_pitch  pitch 正弦幅值（°）
+ *  dbg_sine_freq_pitch pitch 正弦频率（Hz）
+ *
+ *  ---- 统一观测目标（两种测试模式共用）----
+ *  dbg_tgt_yaw         当前有效 yaw  目标（°），与 dbg_angle2 对齐观测
+ *  dbg_tgt_pitch       当前有效 pitch 目标（°），与 dbg_angle4 对齐观测
+ *
+ *  注：dbg_err2 / dbg_err4 在两种模式下均为 目标-实际，直接导出用于计算
+ *      MAE = mean(|err|)   RMSE = sqrt(mean(err²))   MaxErr = max(|err|)
+ * ================================================================== */
+volatile int   dbg_test_mode      = 0;     /* 0=正常  1=阶跃  2=正弦 */
+
+/* 阶跃测试 */
+volatile float dbg_step_yaw       = 0.0f;  /* Ozone 里改此值触发 yaw  阶跃 */
+volatile float dbg_step_pitch     = 0.0f;  /* Ozone 里改此值触发 pitch 阶跃 */
+
+/* 正弦跟踪测试（初始值对应题目第一组：A=5°, T=1s → f=1Hz）*/
+volatile float dbg_sine_amp_yaw   = 5.0f;
+volatile float dbg_sine_freq_yaw  = 1.0f;
+volatile float dbg_sine_amp_pitch = 5.0f;
+volatile float dbg_sine_freq_pitch= 1.0f;
+
+/* 统一目标观测（两种测试模式共用，正常模式也同步更新供对比）*/
+volatile float dbg_tgt_yaw        = 0.0f;
+volatile float dbg_tgt_pitch      = 0.0f;
+
+/* 正弦测试内部相位累加器 */
+static float test_sine_phase_yaw   = 0.0f;
+static float test_sine_phase_pitch = 0.0f;
 /* 陀螺仪零偏（校准均值） */
-float gyro_bias[3] = {0.0f, 0.0f, 0.0f};
+float gyro_bias[3]    = {0.0f, 0.0f, 0.0f};
 /* 安装偏移（校准收敛后记录，之后欧拉角减掉此值） */
-float euler_offset[3] = {0.0f, 0.0f, 0.0f}; /* [roll, pitch, yaw] */
+float euler_offset[3] = {0.0f, 0.0f, 0.0f};  /* [roll, pitch, yaw] */
 
 /* TOP_IMU_ALIGN 完成时记录的 IMU 零点偏置
  * dbg_pitch / dbg_yaw 在此之后减掉这个值，使水平位置输出为 0° */
 float imu_zero_pitch = 0.0f;
-float imu_zero_yaw = 0.0f;
+float imu_zero_yaw   = 0.0f;
 
 volatile int imu_calib_done = 0;
 
@@ -336,10 +440,8 @@ void SystemClock_Config(void);
 float enc_to_angle(uint16_t enc, uint16_t zero)
 {
   int32_t diff = (int32_t)enc - (int32_t)zero;
-  if (diff > 4096)
-    diff -= 8192;
-  else if (diff < -4096)
-    diff += 8192;
+  if      (diff >  4096) diff -= 8192;
+  else if (diff < -4096) diff += 8192;
   return (float)diff * 360.0f / 8192.0f;
 }
 
@@ -347,19 +449,17 @@ float enc_to_angle(uint16_t enc, uint16_t zero)
 float angle_err_calc(float target, float current)
 {
   float e = target - current;
-  if (e > 180.0f)
-    e -= 360.0f;
-  else if (e < -180.0f)
-    e += 360.0f;
+  if      (e >  180.0f) e -= 360.0f;
+  else if (e < -180.0f) e += 360.0f;
   return e;
 }
 
 /* USER CODE END 0 */
 
 /**
- * @brief  The application entry point.
- * @retval int
- */
+  * @brief  The application entry point.
+  * @retval int
+  */
 int main(void)
 {
 
@@ -390,10 +490,10 @@ int main(void)
 
   can_user_init(&hcan2);
 
-  pid_init(&angle_pid2, ANGLE_KP, ANGLE_KI, ANGLE_KD, ANGLE_I_MAX, ANGLE_OUT_MAX);
-  pid_init(&speed_pid2, SPEED_KP, SPEED_KI, SPEED_KD, SPEED_I_MAX, SPEED_OUT_MAX);
-  pid_init(&angle_pid4, ANGLE_KP, ANGLE_KI, ANGLE_KD, ANGLE_I_MAX, ANGLE_OUT_MAX);
-  pid_init(&speed_pid4, SPEED_KP, SPEED_KI, SPEED_KD, SPEED_I_MAX, SPEED_OUT_MAX);
+  pid_init(&angle_pid2, ANGLE_KP_YAW,   ANGLE_KI_YAW,   ANGLE_KD_YAW,   ANGLE_I_MAX, ANGLE_OUT_MAX);
+  pid_init(&speed_pid2, SPEED_KP_YAW,   SPEED_KI_YAW,   SPEED_KD_YAW,   SPEED_I_MAX, SPEED_OUT_MAX);
+  pid_init(&angle_pid4, ANGLE_KP_PITCH, ANGLE_KI_PITCH, ANGLE_KD_PITCH, ANGLE_I_MAX, ANGLE_OUT_MAX);
+  pid_init(&speed_pid4, SPEED_KP_PITCH, SPEED_KI_PITCH, SPEED_KD_PITCH, SPEED_I_MAX, SPEED_OUT_MAX);
 
   /* BMI088 初始化 */
   dbg_imu_error = BMI088_init();
@@ -402,9 +502,10 @@ int main(void)
   HAL_Delay(100);
 
   /* 记录电机上电零点 */
-  zero_enc2 = motor_info[MOTOR2_IDX].rotor_angle;
-  zero_enc4 = motor_info[MOTOR4_IDX].rotor_angle;
-  prof_pos = 0.0f;
+  zero_enc2     = motor_info[MOTOR2_IDX].rotor_angle;
+  zero_enc4     = motor_info[MOTOR4_IDX].rotor_angle;
+  prof_pos      = 0.0f;
+  prof_pos_pitch = 0.0f;
   /* 归零虚拟目标初始化为上电时的编码器角度（以零点为参考即 0°），
      上电后若电机已在零点附近则直接满足归零条件，不会产生初始突变 */
   homing_target2 = 0.0f;
@@ -434,13 +535,13 @@ int main(void)
 
     /* 视觉数据挂 Ozone（每帧刷新，不受 10ms 节拍限制）*/
     dbg_vis_detected = g_vision_rx.detected;
-    dbg_vis_yaw = g_vision_rx.yaw_rad;
-    dbg_vis_pitch = g_vision_rx.pitch_rad;
+    dbg_vis_yaw      = g_vision_rx.yaw_rad;
+    dbg_vis_pitch    = g_vision_rx.pitch_rad;
 
     static uint32_t last_tick = 0;
-    if (HAL_GetTick() - last_tick >= 10) /* 10ms = 100Hz，与 MahonyAHRS.c sampleFreq 一致 */
+    if (HAL_GetTick() - last_tick >= 10)   /* 10ms = 100Hz，与 MahonyAHRS.c sampleFreq 一致 */
     {
-      last_tick = HAL_GetTick();
+      last_tick += 10;   /* 固定步进，保证累积精确，避免执行耗时导致周期抖动 */
 
       const float dt = 0.01f;
 
@@ -451,13 +552,13 @@ int main(void)
       BMI088_read(gyro, accel, &temp);
 
       /* 原始数据挂 Ozone（未做任何处理） */
-      dbg_gyro_x = gyro[0];
-      dbg_gyro_y = gyro[1];
-      dbg_gyro_z = gyro[2];
+      dbg_gyro_x  = gyro[0];
+      dbg_gyro_y  = gyro[1];
+      dbg_gyro_z  = gyro[2];
       dbg_accel_x = accel[0];
       dbg_accel_y = accel[1];
       dbg_accel_z = accel[2];
-      dbg_temp = temp;
+      dbg_temp    = temp;
 
       /* ---------------------------------------------------------------- */
       /* 2. 上电校准（前 GYRO_CALIB_MS ms 静止）                          */
@@ -468,12 +569,12 @@ int main(void)
       if (!imu_calib_done)
       {
         /* 静态局部变量：整个校准期间持久化 */
-        static double bias_sum[3] = {0.0, 0.0, 0.0};  /* 陀螺零偏累加 */
-        static double wf_mean[3] = {0.0, 0.0, 0.0};   /* Welford 均值 */
-        static double wf_M2[3] = {0.0, 0.0, 0.0};     /* Welford 离均差平方和 */
-        static double accel_sum[3] = {0.0, 0.0, 0.0}; /* 加速度计累加（用于算安装偏移）*/
-        static int calib_cnt = 0;
-        const int calib_total = GYRO_CALIB_MS / 10; /* 200 次 */
+        static double bias_sum[3]  = {0.0, 0.0, 0.0};  /* 陀螺零偏累加 */
+        static double wf_mean[3]   = {0.0, 0.0, 0.0};  /* Welford 均值 */
+        static double wf_M2[3]     = {0.0, 0.0, 0.0};  /* Welford 离均差平方和 */
+        static double accel_sum[3] = {0.0, 0.0, 0.0};  /* 加速度计累加（用于算安装偏移）*/
+        static int    calib_cnt    = 0;
+        const  int    calib_total  = GYRO_CALIB_MS / 10; /* 200 次 */
 
         /* ---- a) 陀螺零偏累加 ---- */
         bias_sum[0] += (double)gyro[0];
@@ -489,11 +590,11 @@ int main(void)
         calib_cnt++;
         for (int axis = 0; axis < 3; axis++)
         {
-          double val = (double)gyro[axis];
+          double val   = (double)gyro[axis];
           double delta = val - wf_mean[axis];
           wf_mean[axis] += delta / calib_cnt;
-          double delta2 = val - wf_mean[axis];
-          wf_M2[axis] += delta * delta2;
+          double delta2  = val - wf_mean[axis];
+          wf_M2[axis]   += delta * delta2;
         }
 
         dbg_calib_samples = calib_cnt;
@@ -510,12 +611,9 @@ int main(void)
           float r0_gy = (calib_cnt > 1) ? (float)(wf_M2[1] / (calib_cnt - 1)) : 1e-8f;
           float r0_gz = (calib_cnt > 1) ? (float)(wf_M2[2] / (calib_cnt - 1)) : 1e-8f;
           /* 防止 R0 为 0，否则 AKF 增益变 1，退化为纯跟随 */
-          if (r0_gx < 1e-10f)
-            r0_gx = 1e-10f;
-          if (r0_gy < 1e-10f)
-            r0_gy = 1e-10f;
-          if (r0_gz < 1e-10f)
-            r0_gz = 1e-10f;
+          if (r0_gx < 1e-10f) r0_gx = 1e-10f;
+          if (r0_gy < 1e-10f) r0_gy = 1e-10f;
+          if (r0_gz < 1e-10f) r0_gz = 1e-10f;
 
           dbg_r0_gx = r0_gx;
           dbg_r0_gy = r0_gy;
@@ -535,7 +633,7 @@ int main(void)
           float az_mean = (float)(accel_sum[2] / calib_cnt);
 
           /* 归一化到单位向量 */
-          float a_norm = sqrtf(ax_mean * ax_mean + ay_mean * ay_mean + az_mean * az_mean);
+          float a_norm = sqrtf(ax_mean*ax_mean + ay_mean*ay_mean + az_mean*az_mean);
           if (a_norm > 0.1f)
           {
             ax_mean /= a_norm;
@@ -544,34 +642,34 @@ int main(void)
           }
 
           /* 轴映射：与正常运行段一致，不做交换 */
-          float ax0 = ax_mean; /* Mahony ax ← BMI088 accelX */
-          float ay0 = ay_mean; /* Mahony ay ← BMI088 accelY */
+          float ax0 = ax_mean;   /* Mahony ax ← BMI088 accelX */
+          float ay0 = ay_mean;   /* Mahony ay ← BMI088 accelY */
           float az0 = az_mean;
 
           /* 直接由重力方向计算 roll/pitch 安装偏移
            * 先算 Mahony 原始坐标系下的值，再按运行段互换规则转换后存储，
            * 使 euler_offset 与运行段减法所处坐标系一致 */
-          float pitch_offset_raw = -asinf(-ax0) * rad_to_angle;    /* Mahony 原始 pitch */
-          float roll_offset_raw = atan2f(ay0, az0) * rad_to_angle; /* Mahony 原始 roll  */
+          float pitch_offset_raw = -asinf(-ax0) * rad_to_angle;   /* Mahony 原始 pitch */
+          float roll_offset_raw  =  atan2f(ay0, az0) * rad_to_angle; /* Mahony 原始 roll  */
           /* 运行段互换：roll_m = pitch_m, pitch_m = -roll_m
            * 故互换后 roll 偏移 = 原始 pitch 偏移，pitch 偏移 = -原始 roll 偏移 */
-          euler_offset[0] = pitch_offset_raw; /* 互换后 roll  偏移 */
-          euler_offset[1] = -roll_offset_raw; /* 互换后 pitch 偏移 */
-          euler_offset[2] = 0.0f;             /* yaw 无绝对参考，归零 */
+          euler_offset[0] =  pitch_offset_raw;   /* 互换后 roll  偏移 */
+          euler_offset[1] = -roll_offset_raw;    /* 互换后 pitch 偏移 */
+          euler_offset[2] = 0.0f;                /* yaw 无绝对参考，归零 */
 
           /* 用安装偏移初始化 Mahony 四元数，保证后续积分起点正确
            * euler_offset[0] = 互换后 roll 偏移，euler_offset[1] = 互换后 pitch 偏移
            * 反算回 Mahony 原始坐标系：roll_r = euler_offset[0]，pitch_r = -euler_offset[1] */
           {
-            float roll_r = euler_offset[0] / rad_to_angle;   /* 互换后 roll  → Mahony roll  */
-            float pitch_r = -euler_offset[1] / rad_to_angle; /* 互换后 pitch → Mahony pitch（反号）*/
-            float cr = cosf(roll_r * 0.5f);
-            float sr = sinf(roll_r * 0.5f);
+            float roll_r  =  euler_offset[0] / rad_to_angle;   /* 互换后 roll  → Mahony roll  */
+            float pitch_r = -euler_offset[1] / rad_to_angle;   /* 互换后 pitch → Mahony pitch（反号）*/
+            float cr = cosf(roll_r  * 0.5f);
+            float sr = sinf(roll_r  * 0.5f);
             float cp = cosf(pitch_r * 0.5f);
             float sp = sinf(pitch_r * 0.5f);
-            q[0] = cr * cp;
-            q[1] = sr * cp;
-            q[2] = cr * sp;
+            q[0] =  cr * cp;
+            q[1] =  sr * cp;
+            q[2] =  cr * sp;
             q[3] = -sr * sp;
           }
 
@@ -579,42 +677,8 @@ int main(void)
           /* IMU 校准结束时重新记录电机零点，使电机零点与 IMU 姿态零点对齐 */
           zero_enc2 = motor_info[MOTOR2_IDX].rotor_angle;
           zero_enc4 = motor_info[MOTOR4_IDX].rotor_angle;
-          prof_pos = 0.0f;
-
-          /* ---- 上电不在水平面时让 pitch 归水平 ----
-           *
-           *  校准刚结束，IMU 已计算安装偏移（euler_offset），
-           *  此刻 pitch_m - euler_offset[1] 即当前 pitch 物理角度。
-           *  若不为 0，说明上电时 pitch 轴不在水平，
-           *  把 homing_target4 初始化为该偏置值：
-           *    PID 目标 = -homing_target4，homing_target4 步进到 0
-           *    等效于让 pitch 电机从当前位置走到物理水平（编码器零点对应水平面）
-           *
-           *  注意：这里在 Mahony 更新之前，直接用加速度均值反算安装后 pitch。
-           *  euler_offset[1] 即互换后 pitch 偏移（= 相对水平的安装角度），
-           *  但校准时 IMU 已按安装偏移初始化四元数，
-           *  所以校准结束时第一帧 pitch_m ≈ euler_offset[1]（未减偏移前），
-           *  减掉后 ≈ 0°——若此时 pitch 轴不在水平，编码器记录的是倾斜位置。
-           *
-           *  正确做法：用加速度均值直接算上电时 pitch 偏角，作为 homing_target4 初值，
-           *  让 HOMING 阶段把 pitch 电机额外走这段偏角，到达水平面。
-           *  ax0/ay0/az0 已在上方计算（归一化后），用 pitch = asin(-ax0) 估算。      */
-          {
-            /* 上电时刻 pitch 偏角（安装偏移校正后，水平=0°）
-             * ax_mean 已归一化，重力方向对应安装后 pitch 偏角 */
-            float ax0_n = (a_norm > 0.1f) ? (ax_mean) : 0.0f;
-            /* Mahony 原始坐标 pitch = -asin(-ax0)，
-             * 互换后 pitch = -Mahony_roll = -atan2(ay0, az0)
-             * 此处直接用校准段计算好的 euler_offset[1] 作为偏角：
-             * euler_offset[1] = 互换后 pitch 偏移，即上电时 pitch 的物理角度 */
-            float pitch_offset_deg = euler_offset[1]; /* 上电时 pitch 物理角度（°）*/
-            /* 用 homing_target4 存储这个偏置，HOMING 阶段会步进到 0，
-             * 等效于驱动 pitch 从上电位置走到水平面 */
-            homing_target4 = pitch_offset_deg;
-            /* yaw 无绝对参考，homing_target2 保持 0 */
-            homing_target2 = 0.0f;
-          }
-
+          prof_pos       = 0.0f;
+          prof_pos_pitch = 0.0f;
           /* pf_initialized 仍为 0，下一帧正常运行时再初始化 PF */
         }
 
@@ -630,32 +694,30 @@ int main(void)
        *          先 AKF 滤除随机噪声，再减静态零偏                      */
       float gx_akf = Gyro_AKF_Update(&akf_gx, gyro[0]);
       float gy_akf = Gyro_AKF_Update(&akf_gy, gyro[1]);
-      float gz_akf = gyro[2]; /* gz 不经 AKF，直接透传，避免动态压缩 */
+      float gz_akf = gyro[2];   /* gz 不经 AKF，直接透传，避免动态压缩 */
 
       dbg_gx_akf = gx_akf;
       dbg_gy_akf = gy_akf;
       dbg_gz_akf = gz_akf;
 
       /* ---- 3b. 减零偏（不做轴交换，与加速度计保持一致）*/
-      float gx = gx_akf - gyro_bias[0]; /* Mahony gx ← BMI088 gyroX（AKF后） */
-      float gy = gy_akf - gyro_bias[1]; /* Mahony gy ← BMI088 gyroY（AKF后） */
-      float gz = gz_akf - gyro_bias[2]; /* Mahony gz ← BMI088 gyroZ */
+      float gx = gx_akf - gyro_bias[0];   /* Mahony gx ← BMI088 gyroX（AKF后） */
+      float gy = gy_akf - gyro_bias[1];   /* Mahony gy ← BMI088 gyroY（AKF后） */
+      float gz = gz_akf - gyro_bias[2];   /* Mahony gz ← BMI088 gyroZ */
 
       /* ---- 3c. 加速度幅值门限：接近 1g 才参与姿态纠正 ---- */
-      float accel_norm = sqrtf(accel[0] * accel[0] + accel[1] * accel[1] + accel[2] * accel[2]);
+      float accel_norm = sqrtf(accel[0]*accel[0] + accel[1]*accel[1] + accel[2]*accel[2]);
       float ax, ay, az;
       if (accel_norm >= ACCEL_VALID_MIN && accel_norm <= ACCEL_VALID_MAX)
       {
-        ax = accel[0]; /* Mahony ax ← BMI088 accelX */
-        ay = accel[1]; /* Mahony ay ← BMI088 accelY */
+        ax = accel[0];   /* Mahony ax ← BMI088 accelX */
+        ay = accel[1];   /* Mahony ay ← BMI088 accelY */
         az = accel[2];
       }
       else
       {
         /* 幅值异常（有线性加速度/冲击），传入全零让 Mahony 跳过加速度纠正 */
-        ax = 0.0f;
-        ay = 0.0f;
-        az = 0.0f;
+        ax = 0.0f; ay = 0.0f; az = 0.0f;
       }
 
       /* ---- 3b_yaw. Yaw 轴 ZUPT：静止时估计 gz 残余零偏并实时补偿 -------
@@ -670,33 +732,29 @@ int main(void)
        *    YAW_ZUPT_KI      积分增益，推荐 0.001
        *    YAW_BIAS_MAX     零偏估计限幅（rad/s），推荐 0.05
        * ----------------------------------------------------------------- */
-#define YAW_STATIC_THR 0.03f // 静止判断阈值
-#define YAW_ZUPT_KP 0.02f
-#define YAW_ZUPT_KI 0.001f
-#define YAW_BIAS_MAX 0.05f
+#define YAW_STATIC_THR  0.03f   // 静止判断阈值
+#define YAW_ZUPT_KP     0.02f
+#define YAW_ZUPT_KI     0.001f
+#define YAW_BIAS_MAX    0.05f
 
       {
         /* 静止判断：AKF 后减零偏的三轴合矢量 */
-        float gyro_sq = gx * gx + gy * gy + gz * gz;
+        float gyro_sq = gx*gx + gy*gy + gz*gz;
         uint8_t yaw_static = (gyro_sq < (YAW_STATIC_THR * YAW_STATIC_THR));
 
-        static float yaw_drift_bias = 0.0f; /* gz 残余零偏估计（rad/s）*/
-        static float yaw_drift_intg = 0.0f; /* 积分项 */
+        static float yaw_drift_bias = 0.0f;  /* gz 残余零偏估计（rad/s）*/
+        static float yaw_drift_intg = 0.0f;  /* 积分项 */
 
         if (yaw_static)
         {
           /* 静止时 gz 理论为 0，当前值即残余零偏；PI 估计器逐步收敛到真实偏置 */
-          float gz_err = gz; /* 误差 = gz - 0 */
-          yaw_drift_intg += YAW_ZUPT_KI * gz_err * dt;
-          if (yaw_drift_intg > YAW_BIAS_MAX)
-            yaw_drift_intg = YAW_BIAS_MAX;
-          else if (yaw_drift_intg < -YAW_BIAS_MAX)
-            yaw_drift_intg = -YAW_BIAS_MAX;
-          yaw_drift_bias = YAW_ZUPT_KP * gz_err + yaw_drift_intg; /* PI 输出即零偏估计 */
-          if (yaw_drift_bias > YAW_BIAS_MAX)
-            yaw_drift_bias = YAW_BIAS_MAX;
-          else if (yaw_drift_bias < -YAW_BIAS_MAX)
-            yaw_drift_bias = -YAW_BIAS_MAX;
+          float gz_err       = gz;                               /* 误差 = gz - 0 */
+          yaw_drift_intg    += YAW_ZUPT_KI * gz_err * dt;
+          if      (yaw_drift_intg >  YAW_BIAS_MAX) yaw_drift_intg =  YAW_BIAS_MAX;
+          else if (yaw_drift_intg < -YAW_BIAS_MAX) yaw_drift_intg = -YAW_BIAS_MAX;
+          yaw_drift_bias     = YAW_ZUPT_KP * gz_err + yaw_drift_intg;  /* PI 输出即零偏估计 */
+          if      (yaw_drift_bias >  YAW_BIAS_MAX) yaw_drift_bias =  YAW_BIAS_MAX;
+          else if (yaw_drift_bias < -YAW_BIAS_MAX) yaw_drift_bias = -YAW_BIAS_MAX;
         }
 
         /* 从 gz 中减去估计的残余零偏，送入 Mahony 的陀螺不再漂移 */
@@ -709,47 +767,37 @@ int main(void)
       /* ---- 3e. 四元数 → 欧拉角（ZYX，°，-180~+180）减安装偏移 ---- */
       float roll_m, pitch_m, yaw_m;
       {
-        float sin_p = 2.0f * (q[0] * q[2] - q[3] * q[1]);
-        if (sin_p > 1.0f)
-          sin_p = 1.0f;
-        else if (sin_p < -1.0f)
-          sin_p = -1.0f;
+        float sin_p = 2.0f * (q[0]*q[2] - q[3]*q[1]);
+        if      (sin_p >  1.0f) sin_p =  1.0f;
+        else if (sin_p < -1.0f) sin_p = -1.0f;
 
-        roll_m = atan2f(2.0f * (q[0] * q[1] + q[2] * q[3]),
-                        1.0f - 2.0f * (q[1] * q[1] + q[2] * q[2])) *
-                 rad_to_angle;
+        roll_m  = atan2f(2.0f*(q[0]*q[1]+q[2]*q[3]),
+                         1.0f-2.0f*(q[1]*q[1]+q[2]*q[2])) * rad_to_angle;
         pitch_m = asinf(sin_p) * rad_to_angle;
-        yaw_m = atan2f(2.0f * (q[0] * q[3] + q[1] * q[2]),
-                       1.0f - 2.0f * (q[2] * q[2] + q[3] * q[3])) *
-                rad_to_angle;
+        yaw_m   = atan2f(2.0f*(q[0]*q[3]+q[1]*q[2]),
+                         1.0f-2.0f*(q[2]*q[2]+q[3]*q[3])) * rad_to_angle;
 
         /* 减安装偏移之前先做 pitch/roll 物理轴互换（安装方向决定）*/
         float tmp = roll_m;
-        roll_m = pitch_m;
+        roll_m  = pitch_m;
         pitch_m = -tmp;
 
         /* 减安装偏移（euler_offset 存的是互换后坐标系下的值，顺序与此一致）*/
-        roll_m -= euler_offset[0];
+        roll_m  -= euler_offset[0];
         pitch_m -= euler_offset[1];
-        yaw_m -= euler_offset[2];
+        yaw_m   -= euler_offset[2];
 
         /* 归一化到 [-180, +180) */
-        if (roll_m > 180.0f)
-          roll_m -= 360.0f;
-        else if (roll_m < -180.0f)
-          roll_m += 360.0f;
-        if (pitch_m > 90.0f)
-          pitch_m = 90.0f; /* clamp，不做折叠 */
-        else if (pitch_m < -90.0f)
-          pitch_m = -90.0f;
-        if (yaw_m > 180.0f)
-          yaw_m -= 360.0f;
-        else if (yaw_m < -180.0f)
-          yaw_m += 360.0f;
+        if      (roll_m  >  180.0f) roll_m  -= 360.0f;
+        else if (roll_m  < -180.0f) roll_m  += 360.0f;
+        if      (pitch_m >   90.0f) pitch_m  =  90.0f;   /* clamp，不做折叠 */
+        else if (pitch_m <  -90.0f) pitch_m  = -90.0f;
+        if      (yaw_m   >  180.0f) yaw_m   -= 360.0f;
+        else if (yaw_m   < -180.0f) yaw_m   += 360.0f;
       }
 
       /* Mahony 直接输出挂 Ozone（PF 之前，用于对比）*/
-      dbg_roll_mahony = roll_m;
+      dbg_roll_mahony  = roll_m;
       dbg_pitch_mahony = pitch_m;
 
       /* ---- 3f. 粒子滤波（Pitch / Roll）---- */
@@ -782,21 +830,21 @@ int main(void)
        * TOP_IMU_ALIGN 完成后减去零点偏置，使水平位置输出为 0°
        * 对齐完成前 imu_zero_pitch/yaw=0，输出原始绝对角度              */
       dbg_pitch = pitch_m - imu_zero_pitch;
-      dbg_roll = roll_m;
-      dbg_yaw = yaw_m - imu_zero_yaw;
+      dbg_roll  = roll_m;
+      dbg_yaw   = yaw_m  - imu_zero_yaw;
 
       /* ---------------------------------------------------------------- */
       /* 4. 电机控制                                                       */
       /* ---------------------------------------------------------------- */
 #if OPEN_LOOP_TEST
       set_motor_voltage(0, 0, (int16_t)OPEN_LOOP_VOLTAGE,
-                        0,
-                        (int16_t)OPEN_LOOP_VOLTAGE);
+                              0,
+                              (int16_t)OPEN_LOOP_VOLTAGE);
 #else
       /* 读取两个电机反馈 */
-      dbg_angle2 = enc_to_angle(motor_info[MOTOR2_IDX].rotor_angle, zero_enc2);
-      dbg_angle4 = enc_to_angle(motor_info[MOTOR4_IDX].rotor_angle, zero_enc4);
-      dbg_yaw_enc = dbg_angle2; /* yaw 编码器反馈，供 Ozone 观测及 USB 上报 */
+      dbg_angle2  = enc_to_angle(motor_info[MOTOR2_IDX].rotor_angle, zero_enc2);
+      dbg_angle4  = enc_to_angle(motor_info[MOTOR4_IDX].rotor_angle, zero_enc4);
+      dbg_yaw_enc = dbg_angle2;   /* yaw 编码器反馈，供 Ozone 观测及 USB 上报 */
 
       float spd2 = (float)motor_info[MOTOR2_IDX].rotor_speed;
       float spd4 = (float)motor_info[MOTOR4_IDX].rotor_speed;
@@ -808,7 +856,7 @@ int main(void)
        * 4a. 主状态机
        *
        *   STATE_HOMING    → 上电归零（prof_pos 缓慢移向 0°）
-       *   STATE_SCAN      → 哨兵扫描（正弦轨迹）
+       *   STATE_SCAN      → 哨兵扫描（yaw/pitch 独立正弦轨迹）
        *   STATE_RETURNING → 自瞄丢目标后回零，到位后切扫描
        *   STATE_TRACK     → 自瞄跟随（视觉绝对角度 + 限位保护）
        *
@@ -825,20 +873,12 @@ int main(void)
         /* ID2 yaw 轴：homing_target2 独立步进向 0° */
         float step2 = HOMING_SPEED * dt;
         float diff2 = angle_err_calc(0.0f, homing_target2);
-        if (diff2 > step2)
-          homing_target2 += step2;
-        else if (diff2 < -step2)
-          homing_target2 -= step2;
-        else
-          homing_target2 = 0.0f;
+        if      (diff2 >  step2) homing_target2 += step2;
+        else if (diff2 < -step2) homing_target2 -= step2;
+        else                     homing_target2  = 0.0f;
 
         if (fabsf(angle_err_calc(0.0f, dbg_angle2)) < HOMING_THRESH)
-        {
           state2 = STATE_SCAN;
-          /* HOMING→SCAN：相位归零保证从 sin(0)=0 出发，不产生位置跳变 */
-          scan_phase = 0.0f;
-          prof_pos = 0.0f;
-        }
       }
 
       if (state4 == STATE_HOMING)
@@ -846,12 +886,9 @@ int main(void)
         /* ID4 pitch 轴：homing_target4 独立步进向 0°，与 ID2 完全解耦 */
         float step4 = HOMING_SPEED * dt;
         float diff4 = angle_err_calc(0.0f, homing_target4);
-        if (diff4 > step4)
-          homing_target4 += step4;
-        else if (diff4 < -step4)
-          homing_target4 -= step4;
-        else
-          homing_target4 = 0.0f;
+        if      (diff4 >  step4) homing_target4 += step4;
+        else if (diff4 < -step4) homing_target4 -= step4;
+        else                     homing_target4  = 0.0f;
 
         if (fabsf(angle_err_calc(0.0f, dbg_angle4)) < HOMING_THRESH)
           state4 = STATE_SCAN;
@@ -872,7 +909,7 @@ int main(void)
       if (vis_rx_ok != last_vis_rx_ok)
       {
         /* 本周期收到了新帧，以视觉 detected 字段为准 */
-        vision_active = g_vision_rx.detected;
+        vision_active  = g_vision_rx.detected;
         last_vis_rx_ok = vis_rx_ok;
       }
       /* vis_rx_ok 没变：本周期无新帧，vision_active 保持 0 */
@@ -888,7 +925,7 @@ int main(void)
        *    - detected=0 时目标保持上一帧位置不动，同时开始丢目标计时
        *    - 超过 LOST_TIMEOUT_MS 后切 STATE_RETURNING，平滑回零后恢复扫描
        * --------------------------------------------------------- */
-      static int track_confirm_cnt = 0; /* 连续检测到目标的帧数 */
+      static int track_confirm_cnt = 0;  /* 连续检测到目标的帧数 */
 
       /* 低通滤波器状态已提升为全局变量（vis_yaw_filtered / vis_pitch_filtered），
        * 切入 STATE_TRACK 时可直接初始化，供 Ozone 实时观测 */
@@ -904,11 +941,8 @@ int main(void)
            * 低通以 VIS_LPF_ALPHA 速率平滑收敛到视觉角度，
            * 避免目标跳变导致电机猛冲把装甲板甩出视野
            * 同时清前馈和 PID 积分 */
-          vis_yaw_filtered = dbg_angle2;
+          vis_yaw_filtered   = dbg_angle2;
           vis_pitch_filtered = dbg_angle4;
-          /* 同步初始化 track_target，防止第一帧 PID 计算前 target 为旧值 */
-          track_target_yaw = dbg_angle2;
-          track_target_pitch = dbg_angle4;
           dbg_spd_ff = 0.0f;
           angle_pid2.i_out = 0.0f;
           angle_pid4.i_out = 0.0f;
@@ -924,49 +958,54 @@ int main(void)
         track_confirm_cnt = 0;
       }
 
-      /* ---- STATE_TRACK 内部：目标更新与丢目标计时（与 vision_active 解耦）---- */
+      /* ---- STATE_TRACK 内部：目标更新与丢目标计时 ----
+       *
+       *  视觉协议：识别到才发帧，因此"本周期有没有收到新帧"即等价于"是否检测到目标"。
+       *  用 vision_active（本周期 vis_rx_ok 是否递增）而非 g_vision_rx.detected 判断：
+       *    - vision_active=1：本周期收到新帧 → 更新目标，重置丢目标计时
+       *    - vision_active=0：本周期无新帧    → 目标保持不动，累加丢目标时间
+       *  这样帧率低（如 30Hz）时，未收到帧的控制周期不会被误判为"丢失"。
+       * ----------------------------------------------------------------- */
       if (state2 == STATE_TRACK)
       {
-        if (g_vision_rx.detected)
+        if (vision_active)
         {
-          /* detected=1：先做单帧跳变检测，超过 VIS_JUMP_THRESH 认为是异常帧直接丢弃
+          /* 本周期收到新帧：先做单帧跳变检测，超过 VIS_JUMP_THRESH 认为是异常帧直接丢弃
            * 视觉时间戳同步误差可能导致云台运动时坐标转换跳变，在STM32侧兜底过滤 */
-          float vis_yaw_delta = g_vision_rx.yaw_rad - vis_yaw_filtered;
+          float vis_yaw_delta   = g_vision_rx.yaw_rad   - vis_yaw_filtered;
           float vis_pitch_delta = g_vision_rx.pitch_rad - vis_pitch_filtered;
 
           if (fabsf(vis_yaw_delta) > VIS_JUMP_THRESH || fabsf(vis_pitch_delta) > VIS_JUMP_THRESH)
           {
             /* 跳变帧：目标保持不动，只重置丢目标计时，不更新滤波器 */
-            lost_timer_ms = 0;
+            lost_timer_ms     = 0;
             track_confirm_cnt = 0;
           }
           else
           {
             /* 正常帧：经低通滤波后覆盖目标，重置丢目标计时和确认计数 */
-            lost_timer_ms = 0;
+            lost_timer_ms     = 0;
             track_confirm_cnt = 0;
 
-            vis_yaw_filtered = VIS_LPF_ALPHA * g_vision_rx.yaw_rad + (1.0f - VIS_LPF_ALPHA) * vis_yaw_filtered;
-            vis_pitch_filtered = VIS_LPF_ALPHA * g_vision_rx.pitch_rad + (1.0f - VIS_LPF_ALPHA) * vis_pitch_filtered;
+            vis_yaw_filtered   = VIS_LPF_ALPHA * g_vision_rx.yaw_rad
+                               + (1.0f - VIS_LPF_ALPHA) * vis_yaw_filtered;
+            vis_pitch_filtered = VIS_LPF_ALPHA * g_vision_rx.pitch_rad
+                               + (1.0f - VIS_LPF_ALPHA) * vis_pitch_filtered;
 
             /* 减去视觉零点与编码器零点的偏移，对齐坐标系 */
-            track_target_yaw = vis_yaw_filtered - vis_yaw_offset;
+            track_target_yaw   = vis_yaw_filtered   - vis_yaw_offset;
             track_target_pitch = vis_pitch_filtered - vis_pitch_offset;
 
-            if (track_target_yaw > TRACK_LIMIT_YAW)
-              track_target_yaw = TRACK_LIMIT_YAW;
-            else if (track_target_yaw < -TRACK_LIMIT_YAW)
-              track_target_yaw = -TRACK_LIMIT_YAW;
-            if (track_target_pitch > TRACK_LIMIT_PITCH)
-              track_target_pitch = TRACK_LIMIT_PITCH;
-            else if (track_target_pitch < -TRACK_LIMIT_PITCH)
-              track_target_pitch = -TRACK_LIMIT_PITCH;
+            if      (track_target_yaw   >  TRACK_LIMIT_YAW)   track_target_yaw   =  TRACK_LIMIT_YAW;
+            else if (track_target_yaw   < -TRACK_LIMIT_YAW)   track_target_yaw   = -TRACK_LIMIT_YAW;
+            if      (track_target_pitch >  TRACK_LIMIT_PITCH)  track_target_pitch =  TRACK_LIMIT_PITCH;
+            else if (track_target_pitch < -TRACK_LIMIT_PITCH)  track_target_pitch = -TRACK_LIMIT_PITCH;
           }
         }
         else
         {
-          /* detected=0：目标保持不动，开始丢目标计时 */
-          lost_timer_ms += 10; /* 10ms 控制周期 */
+          /* 本周期无新帧：目标保持不动，累加丢目标时间 */
+          lost_timer_ms += 10;  /* 10ms 控制周期 */
           if (lost_timer_ms >= LOST_TIMEOUT_MS)
           {
             /* 超时：从当前编码器位置出发平滑步进回零，清 PID 积分
@@ -974,7 +1013,6 @@ int main(void)
             returning_lock = 1;
             homing_target2 = dbg_angle2;
             homing_target4 = dbg_angle4;
-            dbg_spd_ff = 0.0f; /* 清扫描前馈，防止回零初始帧有残余前馈冲击 */
             angle_pid2.i_out = 0.0f;
             angle_pid4.i_out = 0.0f;
             speed_pid2.i_out = 0.0f;
@@ -996,23 +1034,17 @@ int main(void)
       if (state2 == STATE_RETURNING)
       {
         float step2 = RETURN_SPEED * dt;
-        if (homing_target2 > step2)
-          homing_target2 -= step2;
-        else if (homing_target2 < -step2)
-          homing_target2 += step2;
-        else
-          homing_target2 = 0.0f;
+        if      (homing_target2 >  step2) homing_target2 -= step2;
+        else if (homing_target2 < -step2) homing_target2 += step2;
+        else                              homing_target2  = 0.0f;
       }
 
       if (state4 == STATE_RETURNING)
       {
         float step4 = RETURN_SPEED * dt;
-        if (homing_target4 > step4)
-          homing_target4 -= step4;
-        else if (homing_target4 < -step4)
-          homing_target4 += step4;
-        else
-          homing_target4 = 0.0f;
+        if      (homing_target4 >  step4) homing_target4 -= step4;
+        else if (homing_target4 < -step4) homing_target4 += step4;
+        else                              homing_target4  = 0.0f;
       }
 
       /* 两轴均完成回零才切扫描 */
@@ -1027,120 +1059,201 @@ int main(void)
 
         if (ret2_done && ret4_done)
         {
-          returning_lock = 0; /* 解锁，允许视觉重新切入自瞄 */
-          state2 = STATE_SCAN;
-          state4 = STATE_SCAN;
-          scan_phase = 0.0f; /* 相位归零，从 sin(0)=0 重新开始，无位置跳变 */
-          prof_pos = 0.0f;
-          homing_target2 = 0.0f;
-          homing_target4 = 0.0f;
+          returning_lock   = 0;       /* 解锁，允许视觉重新切入自瞄 */
+          state2           = STATE_SCAN;
+          state4           = STATE_SCAN;
+          scan_phase       = 0.0f;    /* yaw 相位归零，从 sin(0)=0 重新开始 */
+          scan_phase_pitch = 0.0f;    /* pitch 相位同步归零 */
+          prof_pos         = 0.0f;
+          prof_pos_pitch   = 0.0f;
+          homing_target2   = 0.0f;
+          homing_target4   = 0.0f;
         }
       }
 
-      /* ---- 4a-5. 扫描阶段：更新正弦轨迹 ---- */
+      /* ---- 4a-5. 扫描阶段：yaw/pitch 独立正弦轨迹 + 速度前馈 ----
+       *
+       *  Yaw  （ID2）：幅值 SCAN_AMP（±60°），频率 SCAN_FREQ（0.5Hz）
+       *  Pitch（ID4）：幅值 SCAN_AMP_PITCH（±40°），频率 SCAN_FREQ_PITCH（1.5Hz）
+       *  两轴相位独立累加，互不干扰。
+       *
+       *  速度前馈 = 幅值 × ω × cos(ωt)，与位置目标同号方向（已取反与位置目标一致）
+       *  前馈让电机提前知道目标速度，大幅减少高速时的跟踪误差和峰值毛刺。
+       * ---------------------------------------------------------------- */
+      float spd_ff_yaw   = 0.0f;   /* yaw  轴速度前馈（°/s），非扫描状态保持 0 */
+      float spd_ff_pitch = 0.0f;   /* pitch 轴速度前馈（°/s），非扫描状态保持 0 */
+      float accel_ff_yaw   = 0.0f; /* yaw  轴加速度前馈，补偿惯性滞后 */
+      float accel_ff_pitch = 0.0f; /* pitch 轴加速度前馈，补偿惯性滞后 */
+
       if (state2 == STATE_SCAN)
       {
-        scan_phase += dt;
-        float omega = 2.0f * (float)M_PI * SCAN_FREQ;
-        prof_pos = SCAN_AMP * sinf(omega * scan_phase);
-        float ff_deg_s = SCAN_AMP * omega * cosf(omega * scan_phase);
-        dbg_spd_ff = ff_deg_s * SPEED_FF_GAIN;
+        scan_phase       += dt;
+        scan_phase_pitch += dt;
+
+        float omega_yaw   = 2.0f * (float)M_PI * SCAN_FREQ;
+        float omega_pitch = 2.0f * (float)M_PI * SCAN_FREQ_PITCH;
+
+        prof_pos       = SCAN_AMP       * sinf(omega_yaw   * scan_phase);
+        prof_pos_pitch = SCAN_AMP_PITCH * sinf(omega_pitch * scan_phase_pitch);
+
+        /* 速度前馈：正弦位置目标的一阶导数 = -幅值 × ω × cos(ωt) */
+        spd_ff_yaw   = -SPEED_FF_GAIN * SCAN_AMP       * omega_yaw   * cosf(omega_yaw   * scan_phase);
+        spd_ff_pitch = -SPEED_FF_GAIN * SCAN_AMP_PITCH * omega_pitch * cosf(omega_pitch * scan_phase_pitch);
+
+        /* 加速度前馈：速度前馈的一阶导数 = 幅值 × ω² × sin(ωt)
+         * 补偿电机惯性引起的加减速段滞后误差
+         * tgt = -sin，二阶导 = +sin，故符号为正 */
+        accel_ff_yaw   = -SPEED_FF_GAIN * SCAN_AMP       * omega_yaw   * omega_yaw   * sinf(omega_yaw   * scan_phase);
+        accel_ff_pitch = -SPEED_FF_GAIN * SCAN_AMP_PITCH * omega_pitch * omega_pitch * sinf(omega_pitch * scan_phase_pitch);
+
+        dbg_spd_ff = spd_ff_yaw;  /* Ozone 观测 yaw 前馈，应为余弦波形 */
       }
 
       /* ---- 4a-6. Ozone 调试变量 ---- */
       /* dbg_state：0=归位  1=扫描  2=回零  3=自瞄 */
-      if (state2 == STATE_HOMING)
-        dbg_state = 0;
-      else if (state2 == STATE_SCAN)
-        dbg_state = 1;
-      else if (state2 == STATE_RETURNING)
-        dbg_state = 2;
-      else
-        dbg_state = 3;
+      if      (state2 == STATE_HOMING)    dbg_state = 0;
+      else if (state2 == STATE_SCAN)      dbg_state = 1;
+      else if (state2 == STATE_RETURNING) dbg_state = 2;
+      else                                dbg_state = 3;
 
-      dbg_prof = prof_pos;
+      dbg_prof       = prof_pos;
+      dbg_prof_pitch = prof_pos_pitch;
 
       /* ================================================================
        * 4b. PID 计算
        *
        *   STATE_TRACK               目标 = 视觉绝对角度（已限位）
        *   STATE_HOMING/RETURNING    目标 = 各轴独立 homing_target（解耦归零）
-       *   STATE_SCAN                目标 = prof_pos（正弦扫描轨迹）
+       *   STATE_SCAN                目标 = 各轴独立扫描轨迹 + 速度前馈
        *
-       *   ID2（yaw 轴）  ：target = -track_target_yaw / -homing_target2 / -prof_pos
-       *   ID4（pitch 轴）：target = -track_target_pitch / -homing_target4 / -prof_pos
-       *   负号含义与原始代码一致（电机安装方向取反）
+       *   ID2（yaw 轴）  ：扫描目标 = prof_pos（±60°正弦）
+       *   ID4（pitch 轴）：扫描目标 = prof_pos_pitch（±40°正弦，频率更高）
        * ================================================================ */
 
       /* ---- ID2 PID（yaw 轴）---- */
       {
         float tgt2;
-        if (state2 == STATE_TRACK)
-          tgt2 = track_target_yaw;
-        else if (state2 == STATE_SCAN)
-          tgt2 = -prof_pos;
-        else /* HOMING / RETURNING */
-          tgt2 = -homing_target2;
+        if      (state2 == STATE_TRACK)     tgt2 = track_target_yaw;
+        else if (state2 == STATE_SCAN)      tgt2 = -prof_pos;
+        else /* HOMING / RETURNING */       tgt2 = -homing_target2;
 
-        dbg_err2 = angle_err_calc(tgt2, dbg_angle2);
+        /* ---- 性能测试目标覆盖（仅归零完成后生效，防止上电冲击）---- */
+        if (homing_done && dbg_test_mode == 1)
+        {
+          /* 阶跃测试：直接使用 Ozone 设定的目标值 */
+          tgt2 = dbg_step_yaw;
+        }
+        else if (homing_done && dbg_test_mode == 2)
+        {
+          /* 正弦跟踪测试：内部相位累加，参数 Ozone 实时可改 */
+          test_sine_phase_yaw += 2.0f * (float)M_PI * dbg_sine_freq_yaw * dt;
+          if (test_sine_phase_yaw > 2.0f * (float)M_PI)
+            test_sine_phase_yaw -= 2.0f * (float)M_PI;
+          tgt2 = dbg_sine_amp_yaw * sinf(test_sine_phase_yaw);
+        }
+        else if (dbg_test_mode != 0)
+        {
+          /* 测试模式但归零未完成：相位清零，目标锁 0，等待归零 */
+          test_sine_phase_yaw = 0.0f;
+          tgt2 = 0.0f;
+        }
+
+        /* 统一目标观测变量（供 Ozone Data Sampling 录制）*/
+        dbg_tgt_yaw = tgt2;
+
+        dbg_err2          = angle_err_calc(tgt2, dbg_angle2);
         angle_pid2.err[1] = angle_pid2.err[0];
         angle_pid2.err[0] = dbg_err2;
-        angle_pid2.p_out = angle_pid2.kp * angle_pid2.err[0];
+        angle_pid2.p_out  = angle_pid2.kp * angle_pid2.err[0];
         angle_pid2.i_out += angle_pid2.ki * angle_pid2.err[0];
         LIMIT_MIN_MAX(angle_pid2.i_out, -angle_pid2.i_max, angle_pid2.i_max);
-        angle_pid2.d_out = angle_pid2.kd * (angle_pid2.err[0] - angle_pid2.err[1]);
-        float pid_spd2 = angle_pid2.p_out + angle_pid2.i_out + angle_pid2.d_out;
+        angle_pid2.d_out  = angle_pid2.kd * (angle_pid2.err[0] - angle_pid2.err[1]);
+        float pid_spd2    = angle_pid2.p_out + angle_pid2.i_out + angle_pid2.d_out;
 
-        /* 自瞄时不叠加扫描前馈；回零时单独限幅，防止全速冲向零点甩过 */
-        float ff2 = (state2 == STATE_TRACK) ? 0.0f : dbg_spd_ff;
-        float out_max2 = (state2 == STATE_RETURNING) ? RETURN_ANGLE_OUT_MAX : angle_pid2.out_max;
-        float spd_target2 = pid_spd2 + ff2;
+        /* 速度环：前馈不叠加到速度目标，避免被 KP 二次放大
+         * 回零时单独限幅，防止全速冲向零点甩过 */
+        float out_max2    = (state2 == STATE_RETURNING) ? RETURN_ANGLE_OUT_MAX : angle_pid2.out_max;
+        float spd_target2 = pid_spd2;
         LIMIT_MIN_MAX(spd_target2, -out_max2, out_max2);
 
-        float spd_err2 = spd_target2 - filtered_spd2;
+        float spd_err2    = spd_target2 - filtered_spd2;
         speed_pid2.err[1] = speed_pid2.err[0];
         speed_pid2.err[0] = spd_err2;
-        speed_pid2.p_out = speed_pid2.kp * speed_pid2.err[0];
+        speed_pid2.p_out  = speed_pid2.kp * speed_pid2.err[0];
         speed_pid2.i_out += speed_pid2.ki * speed_pid2.err[0];
         LIMIT_MIN_MAX(speed_pid2.i_out, -speed_pid2.i_max, speed_pid2.i_max);
-        speed_pid2.d_out = speed_pid2.kd * (speed_pid2.err[0] - speed_pid2.err[1]);
-        dbg_voltage2 = speed_pid2.p_out + speed_pid2.i_out + speed_pid2.d_out;
+        speed_pid2.d_out  = speed_pid2.kd * (speed_pid2.err[0] - speed_pid2.err[1]);
+        dbg_voltage2      = speed_pid2.p_out + speed_pid2.i_out + speed_pid2.d_out;
+
+        /* 速度前馈 + 加速度前馈直接叠加到电压，绕过速度环 KP 放大 */
+        if (state2 == STATE_SCAN)
+        {
+          dbg_voltage2 += spd_ff_yaw   * SPEED_FF_VOLTAGE;
+          dbg_voltage2 += accel_ff_yaw * ACCEL_FF_VOLTAGE;
+        }
+
         LIMIT_MIN_MAX(dbg_voltage2, -speed_pid2.out_max, speed_pid2.out_max);
       }
 
       /* ---- ID4 PID（pitch 轴）---- */
       {
         float tgt4;
-        if (state4 == STATE_TRACK)
-          tgt4 = track_target_pitch;
-        else if (state4 == STATE_SCAN)
-          tgt4 = -prof_pos;
-        else /* HOMING / RETURNING */
-          tgt4 = -homing_target4;
+        if      (state4 == STATE_TRACK)     tgt4 = track_target_pitch;
+        else if (state4 == STATE_SCAN)      tgt4 = -prof_pos_pitch;   /* 改用 pitch 独立轨迹 */
+        else /* HOMING / RETURNING */       tgt4 = -homing_target4;
 
-        dbg_err4 = angle_err_calc(tgt4, dbg_angle4);
+        /* ---- 性能测试目标覆盖 ---- */
+        if (homing_done && dbg_test_mode == 1)
+        {
+          tgt4 = dbg_step_pitch;
+        }
+        else if (homing_done && dbg_test_mode == 2)
+        {
+          test_sine_phase_pitch += 2.0f * (float)M_PI * dbg_sine_freq_pitch * dt;
+          if (test_sine_phase_pitch > 2.0f * (float)M_PI)
+            test_sine_phase_pitch -= 2.0f * (float)M_PI;
+          tgt4 = dbg_sine_amp_pitch * sinf(test_sine_phase_pitch);
+        }
+        else if (dbg_test_mode != 0)
+        {
+          test_sine_phase_pitch = 0.0f;
+          tgt4 = 0.0f;
+        }
+
+        /* 统一目标观测变量 */
+        dbg_tgt_pitch = tgt4;
+
+        dbg_err4          = angle_err_calc(tgt4, dbg_angle4);
         angle_pid4.err[1] = angle_pid4.err[0];
         angle_pid4.err[0] = dbg_err4;
-        angle_pid4.p_out = angle_pid4.kp * angle_pid4.err[0];
+        angle_pid4.p_out  = angle_pid4.kp * angle_pid4.err[0];
         angle_pid4.i_out += angle_pid4.ki * angle_pid4.err[0];
         LIMIT_MIN_MAX(angle_pid4.i_out, -angle_pid4.i_max, angle_pid4.i_max);
-        angle_pid4.d_out = angle_pid4.kd * (angle_pid4.err[0] - angle_pid4.err[1]);
-        float pid_spd4 = angle_pid4.p_out + angle_pid4.i_out + angle_pid4.d_out;
+        angle_pid4.d_out  = angle_pid4.kd * (angle_pid4.err[0] - angle_pid4.err[1]);
+        float pid_spd4    = angle_pid4.p_out + angle_pid4.i_out + angle_pid4.d_out;
 
-        /* 自瞄时不叠加扫描前馈；回零时单独限幅，防止全速冲向零点甩过 */
-        float ff4 = (state4 == STATE_TRACK) ? 0.0f : dbg_spd_ff;
-        float out_max4 = (state4 == STATE_RETURNING) ? RETURN_ANGLE_OUT_MAX : angle_pid4.out_max;
-        float spd_target4 = pid_spd4 + ff4;
+        /* 速度环：前馈不叠加到速度目标，避免被 KP 二次放大
+         * 回零时单独限幅，防止全速冲向零点甩过 */
+        float out_max4    = (state4 == STATE_RETURNING) ? RETURN_ANGLE_OUT_MAX : angle_pid4.out_max;
+        float spd_target4 = pid_spd4;
         LIMIT_MIN_MAX(spd_target4, -out_max4, out_max4);
 
-        float spd_err4 = spd_target4 - filtered_spd4;
+        float spd_err4    = spd_target4 - filtered_spd4;
         speed_pid4.err[1] = speed_pid4.err[0];
         speed_pid4.err[0] = spd_err4;
-        speed_pid4.p_out = speed_pid4.kp * speed_pid4.err[0];
+        speed_pid4.p_out  = speed_pid4.kp * speed_pid4.err[0];
         speed_pid4.i_out += speed_pid4.ki * speed_pid4.err[0];
         LIMIT_MIN_MAX(speed_pid4.i_out, -speed_pid4.i_max, speed_pid4.i_max);
-        speed_pid4.d_out = speed_pid4.kd * (speed_pid4.err[0] - speed_pid4.err[1]);
-        dbg_voltage4 = speed_pid4.p_out + speed_pid4.i_out + speed_pid4.d_out;
+        speed_pid4.d_out  = speed_pid4.kd * (speed_pid4.err[0] - speed_pid4.err[1]);
+        dbg_voltage4      = speed_pid4.p_out + speed_pid4.i_out + speed_pid4.d_out;
+
+        /* 速度前馈 + 加速度前馈直接叠加到电压，绕过速度环 KP 放大 */
+        if (state4 == STATE_SCAN)
+        {
+          dbg_voltage4 += spd_ff_pitch   * SPEED_FF_VOLTAGE;
+          dbg_voltage4 += accel_ff_pitch * ACCEL_FF_VOLTAGE;
+        }
+
         LIMIT_MIN_MAX(dbg_voltage4, -speed_pid4.out_max, speed_pid4.out_max);
       }
 
@@ -1158,7 +1271,7 @@ int main(void)
       /* ---------------------------------------------------------------- */
       {
         uint8_t tx_mode = (state2 == STATE_TRACK) ? 0x02 : 0x01;
-        BSP_USB_Send(pitch_m, dbg_yaw_enc, tx_mode); /* yaw 改为编码器反馈（度）*/
+        BSP_USB_Send(pitch_m, dbg_yaw_enc, tx_mode);  /* yaw 改为编码器反馈（度）*/
       }
 
 #endif
@@ -1170,22 +1283,22 @@ int main(void)
 }
 
 /**
- * @brief System Clock Configuration
- * @retval None
- */
+  * @brief System Clock Configuration
+  * @retval None
+  */
 void SystemClock_Config(void)
 {
   RCC_OscInitTypeDef RCC_OscInitStruct = {0};
   RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
 
   /** Configure the main internal regulator output voltage
-   */
+  */
   __HAL_RCC_PWR_CLK_ENABLE();
   __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE1);
 
   /** Initializes the RCC Oscillators according to the specified parameters
-   * in the RCC_OscInitTypeDef structure.
-   */
+  * in the RCC_OscInitTypeDef structure.
+  */
   RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
   RCC_OscInitStruct.HSEState = RCC_HSE_ON;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
@@ -1200,8 +1313,9 @@ void SystemClock_Config(void)
   }
 
   /** Initializes the CPU, AHB and APB buses clocks
-   */
-  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK | RCC_CLOCKTYPE_SYSCLK | RCC_CLOCKTYPE_PCLK1 | RCC_CLOCKTYPE_PCLK2;
+  */
+  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
+                              |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
   RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
   RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
   RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV4;
@@ -1217,26 +1331,23 @@ void SystemClock_Config(void)
 /* USER CODE END 4 */
 
 /**
- * @brief  This function is executed in case of error occurrence.
- * @retval None
- */
+  * @brief  This function is executed in case of error occurrence.
+  * @retval None
+  */
 void Error_Handler(void)
 {
   /* USER CODE BEGIN Error_Handler_Debug */
   __disable_irq();
-  while (1)
-  {
-  }
+  while (1) {}
   /* USER CODE END Error_Handler_Debug */
 }
 #ifdef USE_FULL_ASSERT
 /**
- * @brief  Reports the name of the source file and the source line number
- *         where the assert_param error has occurred.
- * @param  file: pointer to the source file name
- * @param  line: assert_param error line source number
- * @retval None
- */
+  * @brief  Reports the name of the source file and the source line number
+  *         where the assert_param error has occurred.
+  * @param  file: pointer to the source file name
+  * @param  line: assert_param error line source number
+  */
 void assert_failed(uint8_t *file, uint32_t line)
 {
   /* USER CODE BEGIN 6 */
