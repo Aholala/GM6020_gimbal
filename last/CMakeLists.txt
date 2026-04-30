@@ -84,6 +84,7 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
         User/Module
         User/Lib
         User/App
+        User/Bsp/bmi088
 
         # Add user defined include paths
 )

@@ -100,11 +100,11 @@ int main(void)
   /* CAN 驱动初始化 */
   can_user_init(&hcan2);
 
-  /* PID 初始化 */
-  pid_init(&angle_pid2, ANGLE_KP, ANGLE_KI, ANGLE_KD, ANGLE_I_MAX, ANGLE_OUT_MAX);
-  pid_init(&speed_pid2, SPEED_KP, SPEED_KI, SPEED_KD, SPEED_I_MAX, SPEED_OUT_MAX);
-  pid_init(&angle_pid4, ANGLE_KP, ANGLE_KI, ANGLE_KD, ANGLE_I_MAX, ANGLE_OUT_MAX);
-  pid_init(&speed_pid4, SPEED_KP, SPEED_KI, SPEED_KD, SPEED_I_MAX, SPEED_OUT_MAX);
+  /* PID 初始化（Yaw/Pitch 独立参数）*/
+  pid_init(&angle_pid2, ANGLE_KP_YAW,   ANGLE_KI_YAW,   ANGLE_KD_YAW,   ANGLE_I_MAX, ANGLE_OUT_MAX);
+  pid_init(&speed_pid2, SPEED_KP_YAW,   SPEED_KI_YAW,   SPEED_KD_YAW,   SPEED_I_MAX, SPEED_OUT_MAX);
+  pid_init(&angle_pid4, ANGLE_KP_PITCH, ANGLE_KI_PITCH, ANGLE_KD_PITCH, ANGLE_I_MAX, ANGLE_OUT_MAX);
+  pid_init(&speed_pid4, SPEED_KP_PITCH, SPEED_KI_PITCH, SPEED_KD_PITCH, SPEED_I_MAX, SPEED_OUT_MAX);
 
   /* BMI088 初始化 */
   dbg_imu_error = BMI088_init();
@@ -112,10 +112,11 @@ int main(void)
   /* 等第一帧 CAN 数据到达 */
   HAL_Delay(100);
 
-  /* 记录电机上电零点（IMU 校准结束时会重新记录，此处仅作初始值）*/
+  /* 记录电机上电零点 */
   zero_enc2      = motor_info[MOTOR2_IDX].rotor_angle;
   zero_enc4      = motor_info[MOTOR4_IDX].rotor_angle;
   prof_pos       = 0.0f;
+  prof_pos_pitch = 0.0f;
   homing_target2 = 0.0f;
   homing_target4 = 0.0f;
   filtered_spd2  = (float)motor_info[MOTOR2_IDX].rotor_speed;
